@@ -1,0 +1,7 @@
+numpy
+pytest
+pytest-cov
+scipy
+matplotlib
+requests
+jsonschema

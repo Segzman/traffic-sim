@@ -1,0 +1,22 @@
+{
+  "name": "highway_single_lane",
+  "description": "1 km straight single-lane segment, 30 vehicles, 60 s duration",
+  "road": {
+    "length": 1000,
+    "num_lanes": 1,
+    "speed_limit": 30.0
+  },
+  "vehicles": {
+    "count": 30,
+    "initial_speed": 20.0,
+    "idm_params": {
+      "v0": 30.0,
+      "s0": 2.0,
+      "T": 1.5,
+      "a_max": 1.4,
+      "b": 2.0
+    }
+  },
+  "duration": 60,
+  "seed": 42
+}

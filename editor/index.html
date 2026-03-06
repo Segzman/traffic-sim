@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Traffic Sim — Map Editor</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- proj4js for WGS84 ↔ Web Mercator -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { display: flex; flex-direction: column; height: 100vh;
+           font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; color: #e0e0e0; }
+
+    /* ── Toolbar ── */
+    #toolbar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; background: #16213e; border-bottom: 2px solid #0f3460;
+      flex-shrink: 0; flex-wrap: wrap;
+    }
+    #toolbar h1 { font-size: 14px; font-weight: 700; color: #e94560;
+                  letter-spacing: 1px; margin-right: 8px; white-space: nowrap; }
+    .tb-group { display: flex; gap: 4px; }
+    .tb-sep { width: 1px; background: #0f3460; margin: 0 4px; align-self: stretch; }
+    button {
+      padding: 6px 10px; font-size: 12px; cursor: pointer; border: none;
+      border-radius: 4px; background: #0f3460; color: #c0c8d8;
+      transition: background 0.15s, color 0.15s;
+    }
+    button:hover { background: #1a4a8a; color: #fff; }
+    button.active { background: #e94560; color: #fff; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    #status-bar { margin-left: auto; font-size: 11px; color: #8899aa; white-space: nowrap; }
+
+    /* ── Main area ── */
+    #main { display: flex; flex: 1; overflow: hidden; }
+    #map { flex: 1; }
+
+    /* ── Property panel ── */
+    #props {
+      width: 260px; background: #16213e; border-left: 2px solid #0f3460;
+      overflow-y: auto; padding: 12px; flex-shrink: 0;
+    }
+    #props h2 { font-size: 13px; color: #e94560; margin-bottom: 10px;
+                text-transform: uppercase; letter-spacing: 1px; }
+    .prop-row { margin-bottom: 10px; }
+    .prop-row label { display: block; font-size: 11px; color: #8899aa; margin-bottom: 3px; }
+    .prop-row input, .prop-row select {
+      width: 100%; padding: 5px 7px; background: #0f3460; color: #e0e0e0;
+      border: 1px solid #1a4a8a; border-radius: 3px; font-size: 12px;
+    }
+    .prop-btn {
+      width: 100%; margin-top: 4px; padding: 7px; background: #0f3460;
+      color: #e0e0e0; cursor: pointer; border: 1px solid #1a4a8a;
+      border-radius: 3px; font-size: 12px;
+    }
+    .prop-btn:hover { background: #1a4a8a; }
+    .prop-btn.danger { background: #5c0a14; border-color: #e94560; color: #ff6b6b; }
+    .prop-btn.danger:hover { background: #e94560; color: #fff; }
+    #props-hint { color: #4a5568; font-size: 11px; text-align: center;
+                  padding: 20px 0; line-height: 1.6; }
+
+    /* ── Node / Edge styles ── */
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>TRAFFIC SIM</h1>
+  <div class="tb-group">
+    <button id="btn-select" class="active" title="Select / move (S)">⬡ Select</button>
+    <button id="btn-node"   title="Add node (N)">＋ Node</button>
+    <button id="btn-edge"   title="Add edge (E)">→ Edge</button>
+    <button id="btn-delete" title="Delete (D)">✕ Delete</button>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <button id="btn-bbox"   title="Import OSM bounding box">🌍 OSM Import</button>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <button id="btn-undo" title="Undo (Ctrl+Z)" disabled>↩ Undo</button>
+    <button id="btn-redo" title="Redo (Ctrl+Y)" disabled>↪ Redo</button>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <button id="btn-export" title="Export scenario JSON (Ctrl+S)">⬇ Export</button>
+    <button id="btn-import" title="Import scenario JSON (Ctrl+O)">⬆ Import</button>
+    <input type="file" id="file-input" accept=".json" style="display:none">
+  </div>
+  <span id="status-bar">Ready — click to begin</span>
+</div>
+
+<div id="main">
+  <div id="map"></div>
+  <div id="props">
+    <h2>Properties</h2>
+    <div id="props-content">
+      <div id="props-hint">
+        Select a node or edge<br>to view its properties.
+        <br><br>
+        <b>Shortcuts</b><br>
+        S — Select &nbsp;N — Node<br>
+        E — Edge &nbsp;&nbsp;D — Delete<br>
+        Ctrl+Z / Ctrl+Y<br>
+        Ctrl+S — Export<br>
+        Ctrl+O — Import<br>
+        Esc — Cancel
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// =====================================================================
+// Proj4 setup: EPSG:4326 (WGS84) ↔ EPSG:3857 (Web Mercator)
+// =====================================================================
+proj4.defs('EPSG:3857',
+  '+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 ' +
+  '+x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +no_defs');
+
+function ll2m(lat, lng) { return proj4('EPSG:4326','EPSG:3857',[lng,lat]); }  // [x,y]
+function m2ll(x, y)     { const r=proj4('EPSG:3857','EPSG:4326',[x,y]); return L.latLng(r[1],r[0]); }
+
+// =====================================================================
+// State
+// =====================================================================
+const state = {
+  meta: { source:'freehand', osm_bbox:null, created_at: new Date().toISOString() },
+  nodes: {},   // id -> {x,y,junction_type,signal_plan}
+  edges: {}    // id -> {from_node,to_node,num_lanes,speed_limit,oneway,geometry,quality_flags}
+};
+
+// Command history
+const history = [];    // [{undo,redo}, ...]
+const redoStack = [];
+
+function execute(undoFn, redoFn) {
+  redoFn();
+  history.push({undo: undoFn, redo: redoFn});
+  redoStack.length = 0;
+  refreshUndoRedo();
+}
+function undo() {
+  if (!history.length) return;
+  const cmd = history.pop();
+  cmd.undo();
+  redoStack.push(cmd);
+  refreshUndoRedo();
+}
+function redo() {
+  if (!redoStack.length) return;
+  const cmd = redoStack.pop();
+  cmd.redo();
+  history.push(cmd);
+  refreshUndoRedo();
+}
+function refreshUndoRedo() {
+  document.getElementById('btn-undo').disabled = history.length === 0;
+  document.getElementById('btn-redo').disabled = redoStack.length === 0;
+}
+
+// =====================================================================
+// ID generators
+// =====================================================================
+let _nid = 0, _eid = 0;
+function newNodeId() { return 'N' + (++_nid); }
+function newEdgeId()  { return 'E' + (++_eid); }
+
+// =====================================================================
+// Leaflet map
+// =====================================================================
+const map = L.map('map', { zoomControl: true }).setView([51.505, -0.09], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 19
+}).addTo(map);
+
+// Layer groups
+const nodeLayer = L.layerGroup().addTo(map);
+const edgeLayer = L.layerGroup().addTo(map);
+const tempLayer = L.layerGroup().addTo(map);   // for edge-drawing previews
+
+// =====================================================================
+// Rendering helpers
+// =====================================================================
+const JUNCTION_COLOURS = {
+  uncontrolled: '#4a90d9', signal: '#f5c518', yield: '#ff8c00', stop: '#e94560'
+};
+
+function nodeColour(jt) { return JUNCTION_COLOURS[jt] || '#4a90d9'; }
+
+// Leaflet markers (node_id → L.CircleMarker)
+const _nodeMarkers = {};
+// Leaflet polylines (edge_id → L.Polyline)
+const _edgeLines   = {};
+
+function drawNode(nid) {
+  const n = state.nodes[nid];
+  if (!n) return;
+  const ll = m2ll(n.x, n.y);
+  if (_nodeMarkers[nid]) { nodeLayer.removeLayer(_nodeMarkers[nid]); }
+  const m = L.circleMarker(ll, {
+    radius: 7, fillColor: nodeColour(n.junction_type), color: '#fff',
+    weight: 2, fillOpacity: 1
+  }).addTo(nodeLayer);
+  m.bindTooltip(nid, {permanent: false, direction:'top'});
+  m.on('click', (e) => { L.DomEvent.stopPropagation(e); onEntityClick('node', nid); });
+  _nodeMarkers[nid] = m;
+}
+
+function removeNodeMarker(nid) {
+  if (_nodeMarkers[nid]) { nodeLayer.removeLayer(_nodeMarkers[nid]); delete _nodeMarkers[nid]; }
+}
+
+function edgeLatLngs(eid) {
+  const e = state.edges[eid];
+  const pts = [];
+  if (e.geometry && e.geometry.length >= 2) {
+    for (const [x,y] of e.geometry) pts.push(m2ll(x,y));
+  } else {
+    const fn = state.nodes[e.from_node], tn = state.nodes[e.to_node];
+    if (fn) pts.push(m2ll(fn.x, fn.y));
+    if (tn) pts.push(m2ll(tn.x, tn.y));
+  }
+  return pts;
+}
+
+function drawEdge(eid) {
+  const e = state.edges[eid];
+  if (!e) return;
+  if (_edgeLines[eid]) { edgeLayer.removeLayer(_edgeLines[eid]); }
+  const lls = edgeLatLngs(eid);
+  if (lls.length < 2) return;
+  const line = L.polyline(lls, {
+    color: '#37474f', weight: 3 + e.num_lanes, opacity: 0.85
+  }).addTo(edgeLayer);
+  // Arrow at midpoint (direction indicator)
+  const mid = lls[Math.floor(lls.length / 2)];
+  line.bindTooltip(`${eid} (${e.num_lanes} lane${e.num_lanes>1?'s':''}, ${e.speed_limit.toFixed(1)} m/s)`,
+    {sticky: true});
+  line.on('click', (ev) => { L.DomEvent.stopPropagation(ev); onEntityClick('edge', eid); });
+  _edgeLines[eid] = line;
+}
+
+function removeEdgeLine(eid) {
+  if (_edgeLines[eid]) { edgeLayer.removeLayer(_edgeLines[eid]); delete _edgeLines[eid]; }
+}
+
+function redrawAll() {
+  nodeLayer.clearLayers(); edgeLayer.clearLayers();
+  Object.keys(_nodeMarkers).forEach(k => delete _nodeMarkers[k]);
+  Object.keys(_edgeLines).forEach(k => delete _edgeLines[k]);
+  Object.keys(state.edges).forEach(eid => drawEdge(eid));
+  Object.keys(state.nodes).forEach(nid => drawNode(nid));
+}
+
+// =====================================================================
+// Mode management
+// =====================================================================
+let mode = 'select';   // 'select' | 'add-node' | 'add-edge' | 'delete'
+let edgeStart = null;  // node id of edge start (in add-edge mode)
+let tempLine = null;
+let selectedId = null;
+let selectedType = null;   // 'node' | 'edge'
+
+const modeButtons = {
+  'select':   document.getElementById('btn-select'),
+  'add-node': document.getElementById('btn-node'),
+  'add-edge': document.getElementById('btn-edge'),
+  'delete':   document.getElementById('btn-delete'),
+};
+
+function setMode(m) {
+  mode = m;
+  edgeStart = null;
+  if (tempLine) { tempLayer.clearLayers(); tempLine = null; }
+  Object.entries(modeButtons).forEach(([k,b]) => b.classList.toggle('active', k === m));
+  setStatus(m === 'add-node' ? 'Click map to add a node'
+    : m === 'add-edge' ? 'Click source node, then destination node'
+    : m === 'delete'   ? 'Click a node or edge to delete it'
+    : 'Click a node or edge to select it');
+  map.getContainer().style.cursor = (m === 'add-node') ? 'crosshair' : '';
+}
+
+function setStatus(msg) { document.getElementById('status-bar').textContent = msg; }
+
+// =====================================================================
+// Entity click handler
+// =====================================================================
+function onEntityClick(type, id) {
+  if (mode === 'delete') {
+    if (type === 'node') deleteNodeCmd(id);
+    else if (type === 'edge') deleteEdgeCmd(id);
+    return;
+  }
+  if (mode === 'add-edge') {
+    if (type !== 'node') return;
+    if (!edgeStart) {
+      edgeStart = id;
+      _nodeMarkers[id] && _nodeMarkers[id].setStyle({color: '#e94560', weight: 3});
+      setStatus(`Edge from ${id} — now click destination node`);
+    } else if (id !== edgeStart) {
+      addEdgeCmd(edgeStart, id);
+      _nodeMarkers[edgeStart] && _nodeMarkers[edgeStart].setStyle({color:'#fff', weight:2});
+      edgeStart = null;
+      if (tempLine) { tempLayer.clearLayers(); tempLine = null; }
+      setStatus('Edge added. Click source node for another, or switch mode.');
+    }
+    return;
+  }
+  // Select mode
+  selectedId = id; selectedType = type;
+  showProperties(type, id);
+  setStatus(`Selected ${type} ${id}`);
+}
+
+// =====================================================================
+// Map click (add-node or add-edge background click)
+// =====================================================================
+map.on('click', (e) => {
+  if (mode === 'add-node') {
+    const [x, y] = ll2m(e.latlng.lat, e.latlng.lng);
+    addNodeCmd(newNodeId(), x, y);
+  } else if (mode === 'add-edge' && edgeStart) {
+    // Clicked on map (not a node) — cancel edge
+    _nodeMarkers[edgeStart] && _nodeMarkers[edgeStart].setStyle({color:'#fff', weight:2});
+    edgeStart = null;
+    if (tempLine) { tempLayer.clearLayers(); tempLine = null; }
+    setStatus('Edge cancelled. Click source node to try again.');
+  } else if (mode === 'select') {
+    selectedId = null; selectedType = null;
+    showPropertiesHint();
+  }
+});
+
+map.on('mousemove', (e) => {
+  if (mode === 'add-edge' && edgeStart) {
+    const startNode = state.nodes[edgeStart];
+    if (!startNode) return;
+    const startLL = m2ll(startNode.x, startNode.y);
+    if (tempLine) tempLayer.clearLayers();
+    tempLine = L.polyline([startLL, e.latlng], {
+      color: '#e94560', weight: 2, dashArray: '6,4', opacity: 0.7
+    }).addTo(tempLayer);
+  }
+});
+
+// =====================================================================
+// State-mutating commands
+// =====================================================================
+function addNodeCmd(nid, x, y, jt='uncontrolled', sp=null) {
+  execute(
+    () => { delete state.nodes[nid]; removeNodeMarker(nid); },
+    () => { state.nodes[nid] = {x,y,junction_type:jt,signal_plan:sp}; drawNode(nid); }
+  );
+}
+
+function deleteNodeCmd(nid) {
+  const savedNode = {...state.nodes[nid]};
+  const connectedEdges = Object.entries(state.edges)
+    .filter(([,e]) => e.from_node===nid || e.to_node===nid)
+    .map(([id,e]) => [id, {...e}]);
+  const confirmMsg = connectedEdges.length > 0
+    ? `Delete node ${nid} and its ${connectedEdges.length} connected edge(s)?` : null;
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  execute(
+    () => {
+      state.nodes[nid] = savedNode; drawNode(nid);
+      connectedEdges.forEach(([id,e]) => { state.edges[id] = e; drawEdge(id); });
+    },
+    () => {
+      delete state.nodes[nid]; removeNodeMarker(nid);
+      connectedEdges.forEach(([id]) => { delete state.edges[id]; removeEdgeLine(id); });
+    }
+  );
+  selectedId = null; selectedType = null; showPropertiesHint();
+}
+
+function addEdgeCmd(from, to, lanes=1, speed=13.9, oneway=false) {
+  const eid = newEdgeId();
+  const fn = state.nodes[from], tn = state.nodes[to];
+  const geom = fn && tn ? [[fn.x, fn.y],[tn.x, tn.y]] : [];
+  const edge = {from_node:from, to_node:to, num_lanes:lanes, speed_limit:speed,
+                oneway, geometry:geom, quality_flags:{lanes:'manual',speed_limit:'manual'}};
+  execute(
+    () => { delete state.edges[eid]; removeEdgeLine(eid); },
+    () => { state.edges[eid] = {...edge}; drawEdge(eid); }
+  );
+}
+
+function deleteEdgeCmd(eid) {
+  const saved = {...state.edges[eid]};
+  execute(
+    () => { state.edges[eid] = saved; drawEdge(eid); },
+    () => { delete state.edges[eid]; removeEdgeLine(eid); }
+  );
+  if (selectedId === eid) { selectedId = null; selectedType = null; showPropertiesHint(); }
+}
+
+function updateNodeCmd(nid, patch) {
+  const before = {...state.nodes[nid]};
+  const after  = {...before, ...patch};
+  execute(
+    () => { state.nodes[nid] = before; drawNode(nid); showProperties('node', nid); },
+    () => { state.nodes[nid] = after;  drawNode(nid); showProperties('node', nid); }
+  );
+}
+
+function updateEdgeCmd(eid, patch) {
+  const before = {...state.edges[eid]};
+  const after  = {...before, ...patch};
+  execute(
+    () => { state.edges[eid] = before; drawEdge(eid); showProperties('edge', eid); },
+    () => { state.edges[eid] = after;  drawEdge(eid); showProperties('edge', eid); }
+  );
+}
+
+// =====================================================================
+// Property panel
+// =====================================================================
+function showPropertiesHint() {
+  document.getElementById('props-content').innerHTML =
+    '<div id="props-hint">Select a node or edge<br>to view its properties.</div>';
+}
+
+function showProperties(type, id) {
+  const el = document.getElementById('props-content');
+  if (type === 'node') {
+    const n = state.nodes[id];
+    if (!n) return;
+    el.innerHTML = `
+      <div class="prop-row"><label>ID</label><input type="text" value="${id}" readonly></div>
+      <div class="prop-row"><label>X (Mercator m)</label><input id="pn-x" type="number" value="${n.x.toFixed(1)}"></div>
+      <div class="prop-row"><label>Y (Mercator m)</label><input id="pn-y" type="number" value="${n.y.toFixed(1)}"></div>
+      <div class="prop-row"><label>Junction type</label>
+        <select id="pn-jt">
+          ${['uncontrolled','signal','yield','stop'].map(jt =>
+            `<option value="${jt}"${n.junction_type===jt?' selected':''}>${jt}</option>`
+          ).join('')}
+        </select>
+      </div>
+      <button class="prop-btn" onclick="applyNodeProps('${id}')">Apply</button>
+      <button class="prop-btn danger" onclick="deleteNodeCmd('${id}')">Delete node</button>`;
+  } else if (type === 'edge') {
+    const e = state.edges[id];
+    if (!e) return;
+    el.innerHTML = `
+      <div class="prop-row"><label>ID</label><input type="text" value="${id}" readonly></div>
+      <div class="prop-row"><label>From → To</label>
+        <input type="text" value="${e.from_node} → ${e.to_node}" readonly></div>
+      <div class="prop-row"><label>Lanes</label>
+        <input id="pe-lanes" type="number" min="1" max="8" value="${e.num_lanes}"></div>
+      <div class="prop-row"><label>Speed limit (m/s)</label>
+        <input id="pe-speed" type="number" min="1" step="0.1" value="${e.speed_limit.toFixed(1)}"></div>
+      <div class="prop-row"><label>One-way</label>
+        <select id="pe-oneway">
+          <option value="false"${!e.oneway?' selected':''}>No</option>
+          <option value="true"${e.oneway?' selected':''}>Yes</option>
+        </select>
+      </div>
+      <button class="prop-btn" onclick="applyEdgeProps('${id}')">Apply</button>
+      <button class="prop-btn danger" onclick="deleteEdgeCmd('${id}')">Delete edge</button>`;
+  }
+}
+
+function applyNodeProps(nid) {
+  const x  = parseFloat(document.getElementById('pn-x').value);
+  const y  = parseFloat(document.getElementById('pn-y').value);
+  const jt = document.getElementById('pn-jt').value;
+  updateNodeCmd(nid, {x, y, junction_type: jt});
+  setStatus(`Node ${nid} updated`);
+}
+
+function applyEdgeProps(eid) {
+  const lanes = parseInt(document.getElementById('pe-lanes').value, 10);
+  const speed = parseFloat(document.getElementById('pe-speed').value);
+  const oneway = document.getElementById('pe-oneway').value === 'true';
+  updateEdgeCmd(eid, {num_lanes: lanes, speed_limit: speed, oneway});
+  setStatus(`Edge ${eid} updated`);
+}
+
+// =====================================================================
+// Export / Import
+// =====================================================================
+function exportScenario() {
+  const data = JSON.stringify({
+    meta: {...state.meta, created_at: new Date().toISOString()},
+    nodes: JSON.parse(JSON.stringify(state.nodes)),
+    edges: JSON.parse(JSON.stringify(state.edges))
+  }, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'scenario_' + Date.now() + '.json';
+  a.click();
+  setStatus('Scenario exported.');
+}
+
+document.getElementById('file-input').addEventListener('change', (ev) => {
+  const file = ev.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      loadScenario(data);
+      setStatus(`Imported: ${file.name}`);
+    } catch (err) {
+      alert('Invalid JSON: ' + err.message);
+    }
+    ev.target.value = '';
+  };
+  reader.readAsText(file);
+});
+
+function loadScenario(data) {
+  if (data.meta)  state.meta  = {...data.meta};
+  if (data.nodes) Object.assign(state.nodes = {}, data.nodes);
+  if (data.edges) Object.assign(state.edges = {}, data.edges);
+  history.length = 0; redoStack.length = 0; refreshUndoRedo();
+  redrawAll();
+}
+
+// =====================================================================
+// OSM bounding-box import
+// =====================================================================
+let bboxRect = null;
+let bboxStart = null;
+
+document.getElementById('btn-bbox').addEventListener('click', () => {
+  const bbox = prompt(
+    'Enter bounding box as: south,west,north,east\n(e.g. 51.510,-0.130,51.515,-0.120)',
+    '51.510,-0.130,51.515,-0.120'
+  );
+  if (!bbox) return;
+  const parts = bbox.split(',').map(Number);
+  if (parts.length !== 4 || parts.some(isNaN)) { alert('Invalid bounding box.'); return; }
+  const [south, west, north, east] = parts;
+  setStatus('Fetching OSM data…');
+  const query = `[out:json][timeout:25];(way["highway"](${south},${west},${north},${east}););out body;>;out skel qt;`;
+  const url = 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(query);
+  fetch(url)
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(data => {
+      importOsmData(data, [south,west,north,east]);
+      setStatus(`OSM import complete — ${Object.keys(state.nodes).length} nodes, ${Object.keys(state.edges).length} edges.`);
+    })
+    .catch(err => { alert('OSM fetch failed: ' + err.message); setStatus('OSM import failed.'); });
+});
+
+function importOsmData(osmJson, bbox) {
+  state.meta.source = 'osm_import';
+  state.meta.osm_bbox = bbox;
+
+  const HIGHWAY_TYPES = new Set(['motorway','trunk','primary','secondary','tertiary',
+    'residential','service','unclassified','road','living_street']);
+  const LANE_DEFAULTS = {motorway:3,trunk:2,primary:2,secondary:2,tertiary:1,
+    residential:1,service:1,unclassified:1,road:1};
+  const SPEED_DEFAULTS = {motorway:31.3,trunk:22.2,primary:13.9,secondary:13.9,
+    tertiary:11.1,residential:8.3,service:5.6,unclassified:11.1,road:11.1};
+  const R = 6378137.0;
+
+  const nodes = {};
+  osmJson.elements.forEach(el => {
+    if (el.type === 'node') {
+      const x = R * (el.lon * Math.PI / 180);
+      const y = R * Math.log(Math.tan(Math.PI/4 + (el.lat * Math.PI / 180) / 2));
+      nodes[el.id] = {id:el.id, lat:el.lat, lon:el.lon, x, y};
+    }
+  });
+
+  // Filter highway ways
+  const ways = osmJson.elements.filter(el =>
+    el.type === 'way' && el.tags && HIGHWAY_TYPES.has(el.tags.highway));
+
+  // Junction nodes (shared between ways or interior of any way)
+  const nodeCount = {}; const interiorNodes = new Set();
+  ways.forEach(w => {
+    w.nodes.forEach((n,i) => {
+      nodeCount[n] = (nodeCount[n]||0) + 1;
+      if (i > 0 && i < w.nodes.length-1) interiorNodes.add(n);
+    });
+  });
+  const junctionNodes = new Set(Object.entries(nodeCount)
+    .filter(([,c]) => c > 1).map(([n]) => Number(n)));
+  interiorNodes.forEach(n => junctionNodes.add(n));
+
+  // Split ways at junctions and build edges
+  state.nodes = {}; state.edges = {};
+  let nextEid = 1;
+
+  ways.forEach(w => {
+    const hc = w.tags.highway || 'road';
+    const lanes = w.tags.lanes ? parseInt(w.tags.lanes) : (LANE_DEFAULTS[hc]||1);
+    let speed = SPEED_DEFAULTS[hc] || 11.1;
+    if (w.tags.maxspeed) {
+      const ms = parseInt(w.tags.maxspeed);
+      if (!isNaN(ms)) speed = ms / 3.6;
+    }
+    const oneway = w.tags.oneway === 'yes';
+    const qFlags = {
+      lanes: w.tags.lanes ? 'green' : 'amber',
+      speed_limit: w.tags.maxspeed ? 'green' : 'amber'
+    };
+
+    // Split at junction nodes
+    let seg = [];
+    w.nodes.forEach((nid, idx) => {
+      seg.push(nid);
+      if (idx > 0 && (junctionNodes.has(nid) || idx === w.nodes.length-1)) {
+        if (seg.length >= 2) {
+          const fn = seg[0], tn = seg[seg.length-1];
+          const geom = seg.map(n => nodes[n] ? [nodes[n].x, nodes[n].y] : null).filter(Boolean);
+          const eid = 'OSM_' + (nextEid++);
+          // Register from/to nodes
+          [fn, tn].forEach(n => {
+            if (nodes[n] && !state.nodes[String(n)]) {
+              state.nodes[String(n)] = {
+                x: nodes[n].x, y: nodes[n].y,
+                junction_type: 'uncontrolled', signal_plan: null
+              };
+            }
+          });
+          state.edges[eid] = {
+            from_node: String(fn), to_node: String(tn),
+            num_lanes: lanes, speed_limit: speed,
+            oneway, geometry: geom, quality_flags: {...qFlags}
+          };
+        }
+        seg = [nid];
+      }
+    });
+  });
+
+  history.length = 0; redoStack.length = 0; refreshUndoRedo();
+  redrawAll();
+  if (bbox) {
+    const sw = m2ll(nodes[Object.keys(nodes)[0]]?.x ?? 0, nodes[Object.keys(nodes)[0]]?.y ?? 0);
+    map.fitBounds([[bbox[0],bbox[1]],[bbox[2],bbox[3]]]);
+  }
+}
+
+// =====================================================================
+// Keyboard shortcuts
+// =====================================================================
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); undo(); }
+    if (e.key === 'y' || e.key === 'Y') { e.preventDefault(); redo(); }
+    if (e.key === 's' || e.key === 'S') { e.preventDefault(); exportScenario(); }
+    if (e.key === 'o' || e.key === 'O') { e.preventDefault(); document.getElementById('file-input').click(); }
+    return;
+  }
+  switch (e.key.toLowerCase()) {
+    case 's': setMode('select'); break;
+    case 'n': setMode('add-node'); break;
+    case 'e': setMode('add-edge'); break;
+    case 'd': setMode('delete'); break;
+    case 'escape':
+      if (mode === 'add-edge' && edgeStart) {
+        _nodeMarkers[edgeStart]?.setStyle({color:'#fff', weight:2});
+        edgeStart = null;
+        if (tempLine) { tempLayer.clearLayers(); tempLine = null; }
+        setStatus('Edge cancelled.');
+      } else { setMode('select'); }
+      break;
+    case 'delete':
+    case 'backspace':
+      if (selectedId && selectedType === 'node') deleteNodeCmd(selectedId);
+      else if (selectedId && selectedType === 'edge') deleteEdgeCmd(selectedId);
+      break;
+  }
+});
+
+// =====================================================================
+// Toolbar button wiring
+// =====================================================================
+document.getElementById('btn-select').addEventListener('click', () => setMode('select'));
+document.getElementById('btn-node').addEventListener('click',   () => setMode('add-node'));
+document.getElementById('btn-edge').addEventListener('click',   () => setMode('add-edge'));
+document.getElementById('btn-delete').addEventListener('click', () => setMode('delete'));
+document.getElementById('btn-undo').addEventListener('click',   undo);
+document.getElementById('btn-redo').addEventListener('click',   redo);
+document.getElementById('btn-export').addEventListener('click', exportScenario);
+document.getElementById('btn-import').addEventListener('click', () => document.getElementById('file-input').click());
+
+// =====================================================================
+// Initial state
+// =====================================================================
+refreshUndoRedo();
+setStatus('Ready — press N to add nodes, E to add edges');
+</script>
+</body>
+</html>

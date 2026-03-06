@@ -1,0 +1,19 @@
+{
+  "_comment": "Two-lane road with mid-block pedestrian crossing. 120 ped/hr demand. Vehicles yield when TTC < 2 s.",
+  "road": {
+    "length": 500.0,
+    "num_lanes": 2,
+    "speed_limit": 13.9
+  },
+  "vehicles": {
+    "count": 5,
+    "initial_speed": 13.9
+  },
+  "pedestrians": {
+    "crossing_x": 250.0,
+    "arrival_rate_ped_hr": 120,
+    "dest_y": 20.0
+  },
+  "duration": 120.0,
+  "seed": 42
+}

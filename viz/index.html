@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Traffic Sim</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #17212b; }
+
+    /* ── Full-page canvas ── */
+    #cv {
+      position: fixed; inset: 0; display: block;
+      width: 100%; height: 100%; cursor: grab;
+    }
+    #cv.dragging { cursor: grabbing; }
+
+    /* ── Shared card style ── */
+    .card {
+      position: fixed;
+      background: rgba(14, 22, 33, 0.93);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 10px;
+      color: #d2dae2;
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+      pointer-events: none;
+    }
+
+    /* ── Stats card — top-left ── */
+    #stats-card { top: 12px; left: 12px; min-width: 190px; padding: 11px 14px 9px; }
+    #stats-card .title {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.09em;
+      text-transform: uppercase; color: #8ab3d0; margin-bottom: 7px;
+    }
+    #stats-card .row {
+      display: flex; justify-content: space-between;
+      align-items: center; gap: 14px; padding: 2px 0;
+    }
+    #stats-card .label { color: #5a6a7d; font-size: 12px; }
+    #stats-card .value {
+      font-weight: 600; color: #e8f0fe; font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .divider { height: 1px; background: rgba(255,255,255,0.06); margin: 6px 0; }
+
+    /* ── Legend card — top-right ── */
+    #legend-card { top: 12px; right: 12px; padding: 10px 14px; min-width: 130px; }
+    #legend-card .title {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.09em;
+      text-transform: uppercase; color: #8ab3d0; margin-bottom: 7px;
+    }
+    .legend-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12px; color: #9eafc0; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+    /* ── Search bar — top-center ── */
+    #search-wrap {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      pointer-events: all;
+      width: min(460px, calc(100vw - 440px));
+      min-width: 240px;
+    }
+    #search-bar {
+      display: flex; align-items: center; width: 100%;
+      background: rgba(14, 22, 33, 0.95);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 24px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.55);
+      overflow: hidden;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    #search-bar:focus-within {
+      border-color: rgba(138,179,208,0.45);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.55), 0 0 0 2px rgba(138,179,208,0.12);
+    }
+    #search-input {
+      flex: 1; border: none; outline: none; background: transparent;
+      padding: 10px 4px 10px 18px;
+      color: #d2dae2;
+      font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-width: 0;
+    }
+    #search-input::placeholder { color: #3d5166; }
+    #search-btn {
+      flex-shrink: 0; padding: 8px 15px 8px 8px;
+      border: none; background: transparent; color: #8ab3d0;
+      cursor: pointer; display: flex; align-items: center;
+      transition: color 0.12s;
+    }
+    #search-btn:hover { color: #c0d8ec; }
+    #search-btn svg { display: block; }
+
+    /* ── Import progress ── */
+    #import-progress {
+      width: 100%;
+      background: rgba(14, 22, 33, 0.93);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px;
+      padding: 8px 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+    }
+    #import-progress.hidden { display: none; }
+    #import-bar-track {
+      height: 2px; background: rgba(138,179,208,0.12);
+      border-radius: 1px; margin-bottom: 6px; overflow: hidden;
+    }
+    #import-bar {
+      height: 100%; background: #8ab3d0; border-radius: 1px;
+      width: 0%; transition: width 0.35s ease;
+    }
+    #import-msg {
+      font: 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #5a7080;
+    }
+    #import-progress.err #import-bar { background: #ff5370; }
+    #import-progress.err #import-msg { color: #ff5370; }
+    #import-progress.done #import-bar { background: #00e676; }
+    #import-progress.done #import-msg { color: #00c853; }
+
+    /* ── Controls card — bottom-left ── */
+    #ctrl-card {
+      bottom: 56px; left: 12px; min-width: 230px;
+      padding: 11px 14px 10px; pointer-events: all;
+    }
+    #ctrl-card .title {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.09em;
+      text-transform: uppercase; color: #8ab3d0; margin-bottom: 9px;
+    }
+    #play-btn {
+      width: 100%; height: 30px;
+      background: rgba(138,179,208,0.12);
+      border: 1px solid rgba(138,179,208,0.25);
+      border-radius: 6px; color: #8ab3d0;
+      font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      cursor: pointer; display: flex; align-items: center;
+      justify-content: center; gap: 6px;
+      transition: background 0.12s, color 0.12s; margin-bottom: 10px;
+    }
+    #play-btn:hover { background: rgba(138,179,208,0.22); color: #c0d8ec; }
+    #play-btn.paused {
+      background: rgba(255,171,0,0.12);
+      border-color: rgba(255,171,0,0.3); color: #ffab00;
+    }
+    #play-btn.paused:hover { background: rgba(255,171,0,0.22); }
+
+    .ctrl-row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+    .ctrl-row:last-child { margin-bottom: 0; }
+    .ctrl-label { font-size: 11px; color: #5a6a7d; width: 52px; flex-shrink: 0; }
+    .ctrl-val {
+      font-size: 11px; font-weight: 600; color: #e8f0fe;
+      font-variant-numeric: tabular-nums; width: 30px; text-align: right; flex-shrink: 0;
+    }
+    input[type=range] {
+      flex: 1; -webkit-appearance: none; height: 3px; border-radius: 2px;
+      background: rgba(138,179,208,0.2); outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+      background: #8ab3d0; border: 2px solid #17212b;
+      box-shadow: 0 0 0 1px rgba(138,179,208,0.5); cursor: pointer;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #8ab3d0; border: 2px solid #17212b; cursor: pointer;
+    }
+
+    /* ── Zoom controls — bottom-right ── */
+    #zoom-ctrl {
+      position: fixed; bottom: 40px; right: 12px;
+      display: flex; flex-direction: column; gap: 2px; pointer-events: all;
+    }
+    .zoom-btn {
+      width: 36px; height: 36px;
+      background: rgba(14, 22, 33, 0.93);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px; color: #d2dae2; font-size: 20px; line-height: 1;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      user-select: none; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      transition: background 0.12s, color 0.12s;
+    }
+    .zoom-btn:hover { background: rgba(35,55,75,0.98); color: #fff; }
+    .zoom-btn:active { background: rgba(60,90,120,0.98); }
+    #reset-btn { margin-top: 4px; font-size: 15px; color: #8ab3d0; }
+
+    /* ── Scale bar — bottom-left ── */
+    #scale-bar { position: fixed; bottom: 28px; left: 16px; pointer-events: none; }
+    #scale-bar .bar {
+      height: 3px; background: #8ab3d0;
+      border-left: 2px solid #8ab3d0; border-right: 2px solid #8ab3d0;
+      margin-bottom: 3px; transition: width 0.2s;
+    }
+    #scale-bar .label {
+      font: 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #5a6a7d; text-align: center;
+    }
+
+    /* ── Attribution ── */
+    #attrib {
+      position: fixed; bottom: 8px; right: 12px;
+      font: 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #2d3f52; pointer-events: none; text-align: right; line-height: 1.5;
+    }
+
+    /* ── Loading overlay ── */
+    #overlay {
+      position: fixed; inset: 0; z-index: 100; background: #17212b;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 14px;
+      font: 13px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #5a6a7d;
+    }
+    #overlay.hidden { display: none; }
+    #overlay.err    { color: #ff5370; }
+    .spinner {
+      width: 36px; height: 36px;
+      border: 3px solid rgba(138,179,208,0.12);
+      border-top-color: #8ab3d0; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    #overlay.err .spinner { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #overlay .err-icon { font-size: 32px; display: none; }
+    #overlay.err .err-icon { display: block; }
+    #msg { max-width: 360px; text-align: center; white-space: pre-line; line-height: 1.7; }
+  </style>
+</head>
+<body>
+
+  <canvas id="cv"></canvas>
+
+  <!-- Stats card — top-left -->
+  <div id="stats-card" class="card">
+    <div class="title" id="s-location">Traffic Sim</div>
+    <div class="row"><span class="label">Clock</span><span class="value" id="s-clock">—</span></div>
+    <div class="row"><span class="label">Sim time</span><span class="value" id="s-time">—</span></div>
+    <div class="row"><span class="label">Vehicles</span><span class="value" id="s-vehs">—</span></div>
+    <div class="row"><span class="label">Avg speed</span><span class="value" id="s-spd">—</span></div>
+    <div class="divider"></div>
+    <div class="row"><span class="label">Pedestrians</span><span class="value" id="s-peds">—</span></div>
+    <div class="row"><span class="label">Render</span><span class="value" id="s-fps">—</span></div>
+  </div>
+
+  <!-- Search bar — top-center -->
+  <div id="search-wrap">
+    <div id="search-bar">
+      <input id="search-input" type="text"
+             placeholder="Search a city to simulate…"
+             autocomplete="off" spellcheck="false">
+      <button id="search-btn" title="Search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+             width="16" height="16">
+          <circle cx="11" cy="11" r="7"/>
+          <line x1="21" y1="21" x2="15.65" y2="15.65"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Import progress (hidden until a search fires) -->
+    <div id="import-progress" class="hidden">
+      <div id="import-bar-track"><div id="import-bar"></div></div>
+      <span id="import-msg">Searching…</span>
+    </div>
+  </div>
+
+  <!-- Legend — top-right -->
+  <div id="legend-card" class="card">
+    <div class="title">Speed</div>
+    <div class="legend-row"><span class="dot" style="background:#00e676"></span>Free flow</div>
+    <div class="legend-row"><span class="dot" style="background:#ffab00"></span>Slowing</div>
+    <div class="legend-row"><span class="dot" style="background:#ff1744"></span>Congested</div>
+    <div class="legend-row"><span class="dot" style="background:#78909c"></span>Stopped</div>
+    <div class="legend-row"><span class="dot" style="background:#40c4ff"></span>Pedestrian</div>
+  </div>
+
+  <!-- Controls card — bottom-left -->
+  <div id="ctrl-card" class="card">
+    <div class="title">Controls</div>
+    <button id="play-btn">▶ Running</button>
+    <div class="ctrl-row">
+      <span class="ctrl-label">Speed</span>
+      <input id="sl-speed" type="range" min="0" max="7" step="1" value="2">
+      <span class="ctrl-val" id="lbl-speed">1×</span>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">Demand</span>
+      <input id="sl-demand" type="range" min="0" max="20" step="1" value="10">
+      <span class="ctrl-val" id="lbl-demand">1×</span>
+    </div>
+  </div>
+
+  <!-- Zoom controls — bottom-right -->
+  <div id="zoom-ctrl">
+    <button class="zoom-btn" id="zoom-in"  title="Zoom in">+</button>
+    <button class="zoom-btn" id="zoom-out" title="Zoom out">−</button>
+    <button class="zoom-btn" id="reset-btn" title="Reset view">⌂</button>
+  </div>
+
+  <!-- Scale bar — bottom-left -->
+  <div id="scale-bar">
+    <div class="bar" id="scale-line" style="width:80px"></div>
+    <div class="label" id="scale-label">—</div>
+  </div>
+
+  <!-- Attribution -->
+  <div id="attrib">
+    © <a href="https://www.openstreetmap.org/copyright" target="_blank" style="color:inherit;text-decoration:none">OpenStreetMap</a> contributors
+    · © <a href="https://carto.com/attributions" target="_blank" style="color:inherit;text-decoration:none">CARTO</a>
+  </div>
+
+  <!-- Loading overlay (initial connect only) -->
+  <div id="overlay">
+    <div class="spinner"></div>
+    <div class="err-icon">✕</div>
+    <div id="msg">Connecting…</div>
+  </div>
+
+  <script src="renderer.js"></script>
+  <script>
+    'use strict';
+
+    const cv      = document.getElementById('cv');
+    const overlay = document.getElementById('overlay');
+    const msgEl   = document.getElementById('msg');
+
+    // ── Stats elements ─────────────────────────────────────────────────────
+    const sLocation = document.getElementById('s-location');
+    const sClock    = document.getElementById('s-clock');
+    const sTime     = document.getElementById('s-time');
+    const sVehs     = document.getElementById('s-vehs');
+    const sSpd      = document.getElementById('s-spd');
+    const sPeds     = document.getElementById('s-peds');
+    const sFps      = document.getElementById('s-fps');
+
+    // ── Search / import elements ───────────────────────────────────────────
+    const searchInput    = document.getElementById('search-input');
+    const searchBtn      = document.getElementById('search-btn');
+    const importProgress = document.getElementById('import-progress');
+    const importBar      = document.getElementById('import-bar');
+    const importMsg      = document.getElementById('import-msg');
+
+    // ── Scale bar ──────────────────────────────────────────────────────────
+    const scaleLine  = document.getElementById('scale-line');
+    const scaleLabel = document.getElementById('scale-label');
+    const SCALE_TARGETS_M = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
+    const MAX_BAR_PX = 120;
+
+    function updateScaleBar() {
+      const ppm = renderer.pixelsPerMeter;
+      if (!ppm || ppm <= 0) return;
+      let chosen = SCALE_TARGETS_M[0];
+      for (const t of SCALE_TARGETS_M) {
+        if (t * ppm <= MAX_BAR_PX) chosen = t; else break;
+      }
+      scaleLine.style.width = Math.round(chosen * ppm) + 'px';
+      scaleLabel.textContent = chosen >= 1000
+        ? (chosen / 1000).toFixed(chosen % 1000 === 0 ? 0 : 1) + ' km'
+        : chosen + ' m';
+    }
+
+    // ── Renderer ───────────────────────────────────────────────────────────
+    const renderer = new TrafficRenderer(cv);
+
+    // ── Resize canvas ──────────────────────────────────────────────────────
+    function resizeCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const w = window.innerWidth, h = window.innerHeight;
+      cv.width  = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+      cv.style.width  = w + 'px';
+      cv.style.height = h + 'px';
+      cv._logicalWidth  = w;
+      cv._logicalHeight = h;
+      if (renderer._net) renderer.refitBase();
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // ── Zoom buttons ───────────────────────────────────────────────────────
+    function canvasCentre() {
+      return { x: (cv._logicalWidth  || cv.width)  / 2,
+               y: (cv._logicalHeight || cv.height) / 2 };
+    }
+    document.getElementById('zoom-in').addEventListener('click', () => {
+      const c = canvasCentre(); renderer.zoomBy(1.5, c.x, c.y);
+    });
+    document.getElementById('zoom-out').addEventListener('click', () => {
+      const c = canvasCentre(); renderer.zoomBy(1/1.5, c.x, c.y);
+    });
+    document.getElementById('reset-btn').addEventListener('click', () => renderer.resetView());
+
+    // ── Drag cursor ────────────────────────────────────────────────────────
+    cv.addEventListener('mousedown', () => cv.classList.add('dragging'));
+    window.addEventListener('mouseup', () => cv.classList.remove('dragging'));
+
+    // ── Server URL ─────────────────────────────────────────────────────────
+    // When loaded from file:// or any port other than 8765 (e.g. the static
+    // preview server on 9000), always target the sim server at 8765.
+    const BASE = (() => {
+      const o = window.location.origin;
+      if (o.startsWith('file') || !o.endsWith(':8765')) {
+        return 'http://localhost:8765';
+      }
+      return o;
+    })();
+
+    // ── Control state ──────────────────────────────────────────────────────
+    let _paused = false;
+    let _currentLocation = '';
+    let _importPolling   = false;
+
+    const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+    function demandFromSlider(v) { return parseFloat((v / 10).toFixed(2)); }
+
+    const playBtn   = document.getElementById('play-btn');
+    const slSpeed   = document.getElementById('sl-speed');
+    const lblSpeed  = document.getElementById('lbl-speed');
+    const slDemand  = document.getElementById('sl-demand');
+    const lblDemand = document.getElementById('lbl-demand');
+
+    async function postControl(body) {
+      try {
+        await fetch(BASE + '/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      } catch (_) {}
+    }
+
+    playBtn.addEventListener('click', () => {
+      _paused = !_paused;
+      playBtn.textContent = _paused ? '⏸ Paused' : '▶ Running';
+      playBtn.className   = _paused ? 'paused' : '';
+      postControl({ paused: _paused });
+    });
+
+    slSpeed.addEventListener('input', () => {
+      const mult = SPEED_STEPS[+slSpeed.value] ?? 1;
+      lblSpeed.textContent = mult + '×';
+      postControl({ speed_mult: mult });
+    });
+
+    slDemand.addEventListener('input', () => {
+      const mult = demandFromSlider(+slDemand.value);
+      lblDemand.textContent = mult.toFixed(mult < 1 ? 2 : 1) + '×';
+      postControl({ demand_mult: mult });
+    });
+
+    lblSpeed.textContent  = SPEED_STEPS[+slSpeed.value] + '×';
+    lblDemand.textContent = demandFromSlider(+slDemand.value).toFixed(1) + '×';
+
+    // ── Search / Import ────────────────────────────────────────────────────
+    function showImportError(msg) {
+      importProgress.className = 'err';
+      importBar.style.width    = '100%';
+      importMsg.textContent    = '✕ ' + msg;
+      _importPolling = false;
+    }
+
+    async function pollImportStatus() {
+      _importPolling = true;
+      return new Promise((resolve) => {
+        const iv = setInterval(async () => {
+          try {
+            const r = await fetch(BASE + '/import_status');
+            if (!r.ok) return;
+            const s = await r.json();
+
+            importBar.style.width = ((s.progress || 0) * 100).toFixed(1) + '%';
+            importMsg.textContent = s.message || s.stage || '…';
+
+            if (s.stage === 'done') {
+              clearInterval(iv);
+              _importPolling = false;
+              importProgress.className = 'done';
+
+              // Re-fetch network and hot-swap renderer
+              try {
+                const nr = await fetch(BASE + '/network');
+                if (nr.ok) {
+                  renderer.setNetwork(await nr.json());
+                  resizeCanvas();   // triggers refitBase with new bounds
+                }
+              } catch (_) {}
+
+              // Fade progress panel after 2 s
+              setTimeout(() => { importProgress.className = 'hidden'; }, 2000);
+              resolve();
+
+            } else if (s.stage === 'error') {
+              clearInterval(iv);
+              showImportError(s.message);
+              resolve();
+            }
+          } catch (_) {}
+        }, 500);
+      });
+    }
+
+    async function doSearch(query) {
+      query = (query || '').trim();
+      if (!query || _importPolling) return;
+
+      importProgress.className = '';
+      importBar.style.width    = '0%';
+      importMsg.textContent    = `Geocoding "${query}"…`;
+      searchInput.blur();
+
+      try {
+        const resp = await fetch(BASE + '/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          showImportError(err.error || `Server error ${resp.status}`);
+          return;
+        }
+        await pollImportStatus();
+      } catch (e) {
+        showImportError(e.message);
+      }
+    }
+
+    searchBtn.addEventListener('click', () => doSearch(searchInput.value));
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doSearch(searchInput.value);
+    });
+
+    // ── Connect and poll ───────────────────────────────────────────────────
+    async function connect() {
+      msgEl.textContent = 'Connecting to ' + BASE + ' …';
+      let netResp;
+      try {
+        netResp = await fetch(BASE + '/network');
+        if (!netResp.ok) throw new Error('HTTP ' + netResp.status);
+      } catch (e) {
+        overlay.className = 'err';
+        msgEl.textContent =
+          'Cannot reach server at ' + BASE +
+          '\n\nStart the server:\n  python run.py scenarios/oakville_on.json --serve';
+        return;
+      }
+
+      renderer.setNetwork(await netResp.json());
+      overlay.className = 'hidden';
+
+      // Poll at ~10 Hz
+      setInterval(async () => {
+        try {
+          const r = await fetch(BASE + '/state');
+          if (!r.ok) return;
+          const state = await r.json();
+          renderer.render(state);
+
+          // ── Sync control UI from server ─────────────────────────────────
+          if (state.ctrl) {
+            const sp = state.ctrl.speed_mult ?? 1;
+            const nearest = SPEED_STEPS.reduce((a, b) =>
+              Math.abs(b - sp) < Math.abs(a - sp) ? b : a);
+            slSpeed.value = SPEED_STEPS.indexOf(nearest);
+            lblSpeed.textContent = nearest + '×';
+
+            const dm = state.ctrl.demand_mult ?? 1;
+            slDemand.value = Math.round(dm * 10);
+            lblDemand.textContent = dm.toFixed(dm < 1 ? 2 : 1) + '×';
+
+            if (state.ctrl.paused !== _paused) {
+              _paused = state.ctrl.paused;
+              playBtn.textContent = _paused ? '⏸ Paused' : '▶ Running';
+              playBtn.className   = _paused ? 'paused' : '';
+            }
+          }
+
+          // ── Sync location name ──────────────────────────────────────────
+          if (state.location && state.location !== _currentLocation) {
+            _currentLocation = state.location;
+            sLocation.textContent = state.location;
+          }
+
+          // ── Stats ───────────────────────────────────────────────────────
+          const vehs = state.vehicles || [];
+          sClock.textContent = state.clock  || '—';
+          sTime.textContent  = state.time.toFixed(1) + ' s';
+          sVehs.textContent  = vehs.length;
+          sPeds.textContent  = (state.pedestrians || []).length;
+          sFps.textContent   = renderer.stats.fps + ' fps';
+
+          // Average speed in km/h
+          if (vehs.length > 0) {
+            const avgMs = vehs.reduce((sum, v) => sum + (v.speed || 0), 0) / vehs.length;
+            sSpd.textContent = (avgMs * 3.6).toFixed(1) + ' km/h';
+          } else {
+            sSpd.textContent = '—';
+          }
+
+          updateScaleBar();
+        } catch (_) {}
+      }, 100);
+    }
+
+    connect();
+  </script>
+</body>
+</html>

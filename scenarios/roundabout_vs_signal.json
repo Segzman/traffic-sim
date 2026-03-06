@@ -1,0 +1,65 @@
+{
+  "roundabout": {
+    "_comment": "4-arm roundabout, 800 veh/hr balanced. Spawner at 200 veh/hr; Poisson conflict stream 800 veh/hr, t_min=5.0s -> empirical mean delay ~10-11s.",
+    "road": {
+      "length": 2000.0,
+      "num_lanes": 1,
+      "speed_limit": 13.9
+    },
+    "junction": {
+      "type": "roundabout",
+      "stop_line": 1990.0,
+      "detection_distance": 200.0,
+      "conflicting_flow_rate": 800,
+      "t_min_mean": 5.0,
+      "t_min_sd": 0.3
+    },
+    "spawner": {
+      "arrival_rate_veh_hr": 200,
+      "v0": 13.9
+    },
+    "vehicles": {"count": 0},
+    "duration": 400.0,
+    "seed": 42
+  },
+  "signal": {
+    "_comment": "4-arm signalised junction, 800 veh/hr balanced. 90s cycle, 2 phases 40s green each.",
+    "road": {
+      "length": 2000.0,
+      "num_lanes": 1,
+      "speed_limit": 13.9
+    },
+    "junction": {
+      "type": "signal",
+      "stop_line": 1990.0,
+      "detection_distance": 200.0,
+      "commit_distance": 15.0,
+      "movement_id": "NS",
+      "plan": {
+        "node_id": "J_signal",
+        "phases": [
+          {
+            "green_movements": ["NS"],
+            "green_duration": 40.0,
+            "yellow_duration": 3.0,
+            "all_red_duration": 1.0
+          },
+          {
+            "green_movements": ["EW"],
+            "green_duration": 40.0,
+            "yellow_duration": 3.0,
+            "all_red_duration": 1.0
+          }
+        ],
+        "offset": 0.0
+      }
+    },
+    "spawner": {
+      "arrival_rate_veh_hr": 200,
+      "v0": 13.9
+    },
+    "vehicles": {"count": 0},
+    "duration": 400.0,
+    "seed": 42
+  }
+}

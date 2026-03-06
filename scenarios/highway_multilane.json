@@ -1,0 +1,22 @@
+{
+  "name": "highway_multilane",
+  "description": "500 m, 3-lane highway, 60 vehicles, 120 s duration",
+  "road": {
+    "length": 500,
+    "num_lanes": 3,
+    "speed_limit": 30.0
+  },
+  "vehicles": {
+    "count": 60,
+    "initial_speed": 20.0,
+    "idm_params": {
+      "v0": {"mean": 30.0, "sd": 3.0},
+      "s0": 2.0,
+      "T": 1.5,
+      "a_max": 1.4,
+      "b": 2.0
+    }
+  },
+  "duration": 120,
+  "seed": 42
+}

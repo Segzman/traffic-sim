@@ -1,0 +1,42 @@
+{
+  "version": 0.6,
+  "generator": "Overpass API (test fixture)",
+  "elements": [
+    {"type": "node", "id": 101, "lat": 51.5100, "lon": -0.1200},
+    {"type": "node", "id": 102, "lat": 51.5110, "lon": -0.1200},
+    {"type": "node", "id": 103, "lat": 51.5120, "lon": -0.1200},
+    {"type": "node", "id": 104, "lat": 51.5110, "lon": -0.1190},
+    {"type": "node", "id": 105, "lat": 51.5110, "lon": -0.1210},
+
+    {
+      "type": "way",
+      "id": 201,
+      "nodes": [101, 102, 103],
+      "tags": {
+        "highway": "primary",
+        "lanes": "2",
+        "maxspeed": "50",
+        "name": "High Street"
+      }
+    },
+
+    {
+      "type": "way",
+      "id": 202,
+      "nodes": [104, 102, 105],
+      "tags": {
+        "highway": "secondary",
+        "name": "Cross Road"
+      }
+    },
+
+    {
+      "type": "way",
+      "id": 203,
+      "nodes": [101, 103],
+      "tags": {
+        "building": "yes"
+      }
+    }
+  ]
+}
