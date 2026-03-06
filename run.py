@@ -197,10 +197,10 @@ def _scenario_from_import(scenario: dict) -> dict:
     )
 
     if osm_signals:
-        # Real OSM data: use actual signalised nodes, capped at 300
-        signal_nodes = [nid for _, nid in osm_signals[:300]]
+        # Real OSM data: use ALL signalised nodes (no cap)
+        signal_nodes = [nid for _, nid in osm_signals]
         print(
-            f"[import] {len(osm_signals)} OSM signal nodes → using top "
+            f"[import] {len(osm_signals)} OSM signal nodes → using all "
             f"{len(signal_nodes)}",
             file=sys.stderr,
         )
@@ -615,7 +615,10 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                     if "paused" in body:
                         _ctrl["paused"] = bool(body["paused"])
                     if "speed_mult" in body:
-                        _ctrl["speed_mult"] = max(0.25, min(8.0, float(body["speed_mult"])))
+                        mult = max(0.25, min(288.0, float(body["speed_mult"])))
+                        _ctrl["speed_mult"] = mult
+                        with _lock:
+                            _world["sim"].set_speed_mult(mult)
                     if "demand_mult" in body:
                         mult = max(0.0, min(5.0, float(body["demand_mult"])))
                         _ctrl["demand_mult"] = mult
