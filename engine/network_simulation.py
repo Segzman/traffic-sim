@@ -154,7 +154,7 @@ class NetworkSimulation:
     config:
         Optional :class:`~engine.config.SimConfig` for live parameter updates.
     compute_backend:
-        ``"auto"`` | ``"numpy"`` | ``"cuda"`` | ``"metal"`` (M6; ignored now).
+        ``"auto"`` | ``"numpy"`` | ``"cuda"`` | ``"metal"`` — selects the IDM compute backend.
     """
 
     def __init__(
@@ -198,6 +198,10 @@ class NetworkSimulation:
             else DayType.WEEKDAY
         )
         self._weather: WeatherState | None = weather
+
+        from engine.compute_backend import get_idm_backend
+        self._idm_fn = get_idm_backend(prefer=compute_backend)
+
         self._spawn_horizon_s = 3600.0          # keep 1h of future demand queued
         self._spawn_scheduled_until = 0.0
 
@@ -616,11 +620,11 @@ class NetworkSimulation:
             T_arr  *= _wm["T"]
             a_arr  *= _wm["a"]
 
-        # ---- THE vectorised IDM call ----
-        accel_arr = idm_acceleration_vec(
+        # ---- THE vectorised IDM call (dispatched to selected backend) ----
+        accel_arr = np.asarray(self._idm_fn(
             v_arr, v0_arr, gap_arr, dv_arr,
             s0_arr, T_arr, a_arr, b_arr,
-        )
+        ))
 
         # Emergency braking for non-positive raw gaps
         raw_arr = np.array(raw_gaps, dtype=np.float64)
