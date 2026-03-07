@@ -189,7 +189,8 @@ class NetworkSimulation:
             for dest, flow_hr in dests.items():
                 if flow_hr <= 0:
                     continue
-                scaled  = flow_hr * self._demand_mult
+                cfg_scale = (self.config.demand_scale if self.config else 1.0)
+                scaled  = flow_hr * self._demand_mult * cfg_scale
                 rate_s  = scaled / 3600.0
                 mean_hw = 1.0 / rate_s
                 t = self.time + float(self.rng.exponential(mean_hw))

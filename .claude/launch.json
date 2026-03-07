@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "traffic-sim-server",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["run.py", "scenarios/oakville_on.json", "--serve", "--port", "8765"],
+      "port": 8765
+    },
+    {
+      "name": "viz-viewer",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "9000", "--directory", "viz"],
+      "port": 9000
+    }
+  ]
+}
