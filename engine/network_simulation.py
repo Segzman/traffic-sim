@@ -173,8 +173,10 @@ class NetworkSimulation:
         start_hour: float = 0.0,
         temporal_demand: bool = False,
         day_type: str | None = None,
+        weather: "WeatherState | None" = None,
     ):
         from engine.demand_profile import DayType
+        from engine.weather import WeatherState
 
         self.network    = network
         self.demand     = demand or {}
@@ -195,6 +197,7 @@ class NetworkSimulation:
             if str(day_type).lower() == "weekend"
             else DayType.WEEKDAY
         )
+        self._weather: WeatherState | None = weather
         self._spawn_horizon_s = 3600.0          # keep 1h of future demand queued
         self._spawn_scheduled_until = 0.0
 
@@ -602,6 +605,16 @@ class NetworkSimulation:
             v0_arr  *= cfg.weather_v0_mult
             s0_arr  *= cfg.weather_s0_mult
             T_arr   *= cfg.weather_T_mult
+
+        # Apply WeatherState multipliers (M5) — overrides/extends SimConfig weather
+        if self._weather is not None:
+            from engine.weather import WEATHER_MULTIPLIERS
+            _wm = WEATHER_MULTIPLIERS.get(self._weather.condition,
+                                          WEATHER_MULTIPLIERS["clear"])
+            v0_arr *= _wm["v0"]
+            s0_arr *= _wm["s0"]
+            T_arr  *= _wm["T"]
+            a_arr  *= _wm["a"]
 
         # ---- THE vectorised IDM call ----
         accel_arr = idm_acceleration_vec(
