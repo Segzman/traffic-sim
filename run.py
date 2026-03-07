@@ -6,12 +6,15 @@ Live-serving mode
 
 Starts an HTTP server (default port 8765) that exposes:
   GET  /network        — road network JSON (re-fetched after each import)
-  GET  /state          — live simulation snapshot polled at ~10 Hz
+  GET  /state          — live simulation snapshot (HTTP fallback)
+  GET  /ws             — WebSocket endpoint; server pushes state after each batch
   GET  /import_status  — progress of an ongoing /import operation
-  POST /control        — update paused / speed_mult / demand_mult
+  POST /control        — update paused / speed_mult / demand_mult / params{}
   POST /import         — geocode + fetch OSM + hot-swap simulation
 """
 import argparse
+import base64
+import hashlib
 import json
 import sys
 import threading
@@ -385,7 +388,37 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
     # Sim clock: start at 7:00 AM (25 200 s into the day)
     _START_S = 7 * 3600
 
+    # ---- WebSocket client registry --------------------------------------
+    _ws_clients: set = set()
+    _ws_lock_ws       = threading.Lock()
+    _WS_MAGIC         = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+    def _ws_encode(payload: bytes) -> bytes:
+        """Wrap payload in a WebSocket text frame (server→client, unmasked)."""
+        n = len(payload)
+        if n <= 125:
+            return bytes([0x81, n]) + payload
+        elif n <= 65535:
+            return bytes([0x81, 0x7E]) + n.to_bytes(2, "big") + payload
+        else:
+            return bytes([0x81, 0x7F]) + n.to_bytes(8, "big") + payload
+
+    def _ws_broadcast(payload: bytes) -> None:
+        if not _ws_clients:
+            return
+        frame = _ws_encode(payload)
+        dead: set = set()
+        with _ws_lock_ws:
+            for sock in list(_ws_clients):
+                try:
+                    sock.sendall(frame)
+                except OSError:
+                    dead.add(sock)
+            _ws_clients.difference_update(dead)
+
     # ---- Simulation loop (daemon thread) ---------------------------------
+    _TARGET_BATCH_S = 0.05   # target ~20 batches/s → smooth UI at any speed
+
     def _sim_loop() -> None:
         while True:
             with _ctrl_lock:
@@ -396,11 +429,17 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                 continue
             t0 = _time_module.monotonic()
             with _lock:
-                s = _world["sim"]
-                s.step()
+                s  = _world["sim"]
                 dt = s.dt
+                # Run enough steps to cover ~50 ms of real time at current speed.
+                # At 1× (dt=0.1): batch=1; at 288× (dt=0.5): batch=29.
+                batch = max(1, round(speed_mult * _TARGET_BATCH_S / dt))
+                for _ in range(batch):
+                    s.step()
             elapsed = _time_module.monotonic() - t0
-            _time_module.sleep(max(0.0, dt / speed_mult - elapsed))
+            _time_module.sleep(max(0.0, _TARGET_BATCH_S - elapsed))
+            # Push fresh state to all connected WebSocket clients
+            _ws_broadcast(_state_payload())
 
     sim_thread = threading.Thread(target=_sim_loop, daemon=True, name="sim-loop")
     sim_thread.start()
@@ -580,6 +619,46 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
             elif path == "/state":
                 self._json(200, _state_payload())
 
+            elif path == "/ws":
+                ws_key = self.headers.get("Sec-WebSocket-Key", "")
+                if self.headers.get("Upgrade", "").lower() != "websocket" or not ws_key:
+                    self._json(400, b'{"error":"websocket upgrade required"}')
+                    return
+                accept = base64.b64encode(
+                    hashlib.sha1((ws_key + _WS_MAGIC).encode()).digest()
+                ).decode()
+                self.send_response(101)
+                self.send_header("Upgrade",              "websocket")
+                self.send_header("Connection",           "Upgrade")
+                self.send_header("Sec-WebSocket-Accept", accept)
+                self.end_headers()
+                self.wfile.flush()
+                sock = self.connection
+                with _ws_lock_ws:
+                    _ws_clients.add(sock)
+                try:
+                    while True:
+                        hdr = sock.recv(2)
+                        if len(hdr) < 2:
+                            break
+                        opcode  = hdr[0] & 0x0F
+                        if opcode == 0x8:       # close frame
+                            break
+                        masked  = bool(hdr[1] & 0x80)
+                        plen    = hdr[1] & 0x7F
+                        if plen == 126:
+                            plen = int.from_bytes(sock.recv(2), "big")
+                        elif plen == 127:
+                            plen = int.from_bytes(sock.recv(8), "big")
+                        to_skip = (4 if masked else 0) + plen
+                        if to_skip:
+                            sock.recv(to_skip)
+                except OSError:
+                    pass
+                finally:
+                    with _ws_lock_ws:
+                        _ws_clients.discard(sock)
+
             elif path == "/config":
                 with _ctrl_lock:
                     self._json(200, json.dumps(_ctrl).encode())
@@ -624,6 +703,17 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                         _ctrl["demand_mult"] = mult
                         with _lock:
                             _world["sim"].set_demand_mult(mult)
+                    # M2: forward SimConfig params dict
+                    if "params" in body and isinstance(body["params"], dict):
+                        with _lock:
+                            cfg = getattr(_world["sim"], "config", None)
+                            if cfg is not None:
+                                cfg.update(**body["params"])
+                            # speed_mult in params also updates ctrl + sim
+                            if "speed_mult" in body["params"]:
+                                sm = max(0.25, min(288.0, float(body["params"]["speed_mult"])))
+                                _ctrl["speed_mult"] = sm
+                                _world["sim"].set_speed_mult(sm)
                     resp = json.dumps(_ctrl).encode()
                 self._json(200, resp)
 

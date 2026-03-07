@@ -214,6 +214,59 @@
       color: #2d3f52; pointer-events: none; text-align: right; line-height: 1.5;
     }
 
+    /* ── Dashboard card — bottom-right (above zoom controls) ── */
+    #dash-card {
+      bottom: 180px; right: 56px; max-width: 265px; min-width: 220px;
+      padding: 11px 14px 10px; pointer-events: all;
+    }
+    #dash-card .d-title {
+      font-size: 11px; font-weight: 700; letter-spacing: 0.09em;
+      text-transform: uppercase; color: #8ab3d0; margin-bottom: 8px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #dash-card details { margin-bottom: 4px; }
+    #dash-card summary {
+      cursor: pointer; font-size: 11px; font-weight: 600;
+      color: #7a9ab5; padding: 4px 0; list-style: none;
+      display: flex; align-items: center; gap: 6px; user-select: none;
+    }
+    #dash-card summary::before {
+      content: '▶'; font-size: 7px; transition: transform 0.15s; color: #4a6a80;
+    }
+    #dash-card details[open] summary::before { transform: rotate(90deg); }
+    #dash-card summary::-webkit-details-marker { display: none; }
+    .dp-row {
+      display: flex; align-items: center; gap: 7px;
+      padding: 3px 0 3px 13px;
+    }
+    .dp-label {
+      font-size: 11px; color: #5a6a7d; width: 76px; flex-shrink: 0; cursor: help;
+    }
+    .dp-val {
+      font-size: 11px; font-weight: 600; color: #e8f0fe;
+      font-variant-numeric: tabular-nums; width: 38px; text-align: right; flex-shrink: 0;
+    }
+    /* Presets toolbar */
+    #presets-row { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
+    .preset-btn {
+      padding: 3px 8px;
+      background: rgba(138,179,208,0.08);
+      border: 1px solid rgba(138,179,208,0.18);
+      border-radius: 4px; color: #8ab3d0;
+      font: 600 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      cursor: pointer; white-space: nowrap; transition: background 0.12s, color 0.12s;
+    }
+    .preset-btn:hover { background: rgba(138,179,208,0.2); color: #c0d8ec; }
+    .preset-btn.p-reset { color: #ff5370; border-color: rgba(255,83,112,0.3); }
+    .preset-btn.p-reset:hover { background: rgba(255,83,112,0.1); }
+    /* WS status dot */
+    #ws-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: #3a4a5a;
+      display: inline-block; transition: background 0.4s; flex-shrink: 0;
+    }
+    #ws-dot.connected { background: #00e676; box-shadow: 0 0 4px #00e67688; }
+    #ws-dot.error     { background: #ff5370; }
+
     /* ── Loading overlay ── */
     #overlay {
       position: fixed; inset: 0; z-index: 100; background: #17212b;
@@ -291,7 +344,7 @@
     <button id="play-btn">▶ Running</button>
     <div class="ctrl-row">
       <span class="ctrl-label">Speed</span>
-      <input id="sl-speed" type="range" min="0" max="7" step="1" value="2">
+      <input id="sl-speed" type="range" min="0" max="10" step="1" value="3">
       <span class="ctrl-val" id="lbl-speed">1×</span>
     </div>
     <div class="ctrl-row">
@@ -299,6 +352,88 @@
       <input id="sl-demand" type="range" min="0" max="20" step="1" value="10">
       <span class="ctrl-val" id="lbl-demand">1×</span>
     </div>
+  </div>
+
+  <!-- Dashboard / SimConfig params — bottom-right -->
+  <div id="dash-card" class="card">
+    <div class="d-title">
+      <span>Parameters</span>
+      <span id="ws-dot" title="WebSocket connection"></span>
+    </div>
+    <div id="presets-row">
+      <button class="preset-btn" data-preset="Rush Hour">Rush Hour</button>
+      <button class="preset-btn" data-preset="Aggressive">Aggressive</button>
+      <button class="preset-btn" data-preset="Rainy Day">Rainy Day</button>
+      <button class="preset-btn" data-preset="Night">Night</button>
+      <button class="preset-btn p-reset" data-preset="Reset">Reset</button>
+    </div>
+    <details>
+      <summary>Driving</summary>
+      <div class="dp-row">
+        <span class="dp-label" title="Maximum acceleration (m/s²). Higher = snappier vehicles.">a max</span>
+        <input type="range" min="0.5" max="4.0" step="0.1" data-param="idm_a_max" value="1.4">
+        <span class="dp-val" data-lbl="idm_a_max">1.4</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="Comfortable deceleration (m/s²). Higher = harder braking.">b decel</span>
+        <input type="range" min="0.5" max="6.0" step="0.1" data-param="idm_b" value="2.0">
+        <span class="dp-val" data-lbl="idm_b">2.0</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="Desired time headway (s). Gap drivers try to maintain.">headway</span>
+        <input type="range" min="0.5" max="3.0" step="0.1" data-param="idm_T" value="1.5">
+        <span class="dp-val" data-lbl="idm_T">1.5 s</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="Minimum bumper-to-bumper gap (m) at standstill.">min gap</span>
+        <input type="range" min="0.5" max="6.0" step="0.5" data-param="idm_s0" value="2.0">
+        <span class="dp-val" data-lbl="idm_s0">2.0 m</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="MOBIL politeness factor (0 = selfish, 1 = altruistic).">politeness</span>
+        <input type="range" min="0.0" max="1.0" step="0.05" data-param="mobil_politeness" value="0.3">
+        <span class="dp-val" data-lbl="mobil_politeness">0.30</span>
+      </div>
+    </details>
+    <details>
+      <summary>Signals</summary>
+      <div class="dp-row">
+        <span class="dp-label" title="Total signal cycle length in seconds.">cycle</span>
+        <input type="range" min="30" max="180" step="5" data-param="signal_cycle" value="90">
+        <span class="dp-val" data-lbl="signal_cycle">90 s</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="Fraction of the cycle that is green (0–1).">green %</span>
+        <input type="range" min="0.2" max="0.8" step="0.05" data-param="signal_green_ratio" value="0.5">
+        <span class="dp-val" data-lbl="signal_green_ratio">50%</span>
+      </div>
+    </details>
+    <details>
+      <summary>Demand</summary>
+      <div class="dp-row">
+        <span class="dp-label" title="Demand multiplier — 2.0 spawns twice as many vehicles.">scale</span>
+        <input type="range" min="0.1" max="3.0" step="0.1" data-param="demand_scale" value="1.0">
+        <span class="dp-val" data-lbl="demand_scale">1.0×</span>
+      </div>
+    </details>
+    <details>
+      <summary>Weather</summary>
+      <div class="dp-row">
+        <span class="dp-label" title="Speed limit multiplier (0.9 = 10% slower in wet/icy roads).">v0 ×</span>
+        <input type="range" min="0.5" max="1.0" step="0.05" data-param="weather_v0_mult" value="1.0">
+        <span class="dp-val" data-lbl="weather_v0_mult">1.00</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="Minimum gap multiplier in bad weather (1.2 = 20% larger).">gap ×</span>
+        <input type="range" min="1.0" max="2.0" step="0.05" data-param="weather_s0_mult" value="1.0">
+        <span class="dp-val" data-lbl="weather_s0_mult">1.00</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" title="Time headway multiplier in bad weather.">T ×</span>
+        <input type="range" min="1.0" max="2.0" step="0.05" data-param="weather_T_mult" value="1.0">
+        <span class="dp-val" data-lbl="weather_T_mult">1.00</span>
+      </div>
+    </details>
   </div>
 
   <!-- Zoom controls — bottom-right -->
@@ -421,7 +556,7 @@
     let _currentLocation = '';
     let _importPolling   = false;
 
-    const SPEED_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+    const SPEED_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 288];
     function demandFromSlider(v) { return parseFloat((v / 10).toFixed(2)); }
 
     const playBtn   = document.getElementById('play-btn');
@@ -541,7 +676,144 @@
       if (e.key === 'Enter') doSearch(searchInput.value);
     });
 
-    // ── Connect and poll ───────────────────────────────────────────────────
+    // ── Dashboard / SimConfig params ──────────────────────────────────────
+    const PARAM_DEFAULTS = {
+      idm_a_max: 1.4, idm_b: 2.0, idm_T: 1.5, idm_s0: 2.0,
+      mobil_politeness: 0.3, mobil_b_safe: 3.0,
+      signal_cycle: 90.0, signal_green_ratio: 0.5,
+      demand_scale: 1.0,
+      weather_v0_mult: 1.0, weather_s0_mult: 1.0, weather_T_mult: 1.0,
+    };
+
+    const PRESETS = {
+      'Rush Hour':  { idm_T: 1.0, idm_s0: 1.5, demand_scale: 2.0, signal_green_ratio: 0.6 },
+      'Aggressive': { idm_a_max: 3.0, idm_T: 0.8, mobil_politeness: 0.0 },
+      'Rainy Day':  { weather_v0_mult: 0.9, weather_s0_mult: 1.2, weather_T_mult: 1.15 },
+      'Night':      { demand_scale: 0.15, idm_T: 1.8 },
+      'Reset':      {},
+    };
+
+    const PARAM_FMT = {
+      idm_T:              v => (+v).toFixed(1) + ' s',
+      idm_s0:             v => (+v).toFixed(1) + ' m',
+      signal_cycle:       v => Math.round(+v) + ' s',
+      signal_green_ratio: v => Math.round(+v * 100) + '%',
+      demand_scale:       v => (+v).toFixed(1) + '×',
+    };
+    function fmtParam(name, val) {
+      return (PARAM_FMT[name] || (v => (+v).toFixed(2)))(val);
+    }
+
+    function debounce(fn, ms) {
+      let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+    }
+    const sendParams = debounce((p) => postControl({ params: p }), 150);
+
+    // Attach listeners + restore from localStorage
+    document.querySelectorAll('[data-param]').forEach(input => {
+      const name = input.dataset.param;
+      const lbl  = document.querySelector(`[data-lbl="${name}"]`);
+      const saved = localStorage.getItem('sim_' + name);
+      if (saved !== null) {
+        input.value = saved;
+        if (lbl) lbl.textContent = fmtParam(name, saved);
+      }
+      input.addEventListener('input', () => {
+        if (lbl) lbl.textContent = fmtParam(name, input.value);
+        localStorage.setItem('sim_' + name, input.value);
+        sendParams({ [name]: parseFloat(input.value) });
+      });
+    });
+
+    // Push all stored params to backend once connected
+    function applyStoredParams() {
+      const params = {};
+      document.querySelectorAll('[data-param]').forEach(i => {
+        params[i.dataset.param] = parseFloat(i.value);
+      });
+      postControl({ params });
+    }
+    setTimeout(applyStoredParams, 600);
+
+    // Preset buttons
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const name   = btn.dataset.preset;
+        const values = name === 'Reset'
+          ? { ...PARAM_DEFAULTS }
+          : { ...PARAM_DEFAULTS, ...PRESETS[name] };
+        document.querySelectorAll('[data-param]').forEach(input => {
+          const p = input.dataset.param;
+          if (p in values) {
+            input.value = values[p];
+            const lbl = document.querySelector(`[data-lbl="${p}"]`);
+            if (lbl) lbl.textContent = fmtParam(p, values[p]);
+            localStorage.setItem('sim_' + p, values[p]);
+          }
+        });
+        postControl({ params: values });
+      });
+    });
+
+    // ── State handler (shared between WS and HTTP fallback) ───────────────
+    function handleState(state) {
+      renderer.render(state);
+
+      // Sync control UI from server
+      if (state.ctrl) {
+        const sp = state.ctrl.speed_mult ?? 1;
+        const nearest = SPEED_STEPS.reduce((a, b) =>
+          Math.abs(b - sp) < Math.abs(a - sp) ? b : a);
+        slSpeed.value = SPEED_STEPS.indexOf(nearest);
+        lblSpeed.textContent = nearest + '×';
+
+        const dm = state.ctrl.demand_mult ?? 1;
+        slDemand.value = Math.round(dm * 10);
+        lblDemand.textContent = dm.toFixed(dm < 1 ? 2 : 1) + '×';
+
+        if (state.ctrl.paused !== _paused) {
+          _paused = state.ctrl.paused;
+          playBtn.textContent = _paused ? '⏸ Paused' : '▶ Running';
+          playBtn.className   = _paused ? 'paused' : '';
+        }
+      }
+
+      if (state.location && state.location !== _currentLocation) {
+        _currentLocation = state.location;
+        sLocation.textContent = state.location;
+      }
+
+      const vehs = state.vehicles || [];
+      sClock.textContent = state.clock || '—';
+      sTime.textContent  = state.time.toFixed(1) + ' s';
+      sVehs.textContent  = vehs.length;
+      sPeds.textContent  = (state.pedestrians || []).length;
+      sFps.textContent   = renderer.stats.fps + ' fps';
+
+      if (vehs.length > 0) {
+        const avgMs = vehs.reduce((sum, v) => sum + (v.speed || 0), 0) / vehs.length;
+        sSpd.textContent = (avgMs * 3.6).toFixed(1) + ' km/h';
+      } else {
+        sSpd.textContent = '—';
+      }
+      updateScaleBar();
+    }
+
+    // ── WebSocket connection with auto-reconnect ───────────────────────────
+    const wsDot = document.getElementById('ws-dot');
+
+    function connectWS() {
+      const wsUrl = BASE.replace(/^http/, 'ws') + '/ws';
+      const ws = new WebSocket(wsUrl);
+      ws.onopen  = ()  => { wsDot.className = 'connected'; };
+      ws.onerror = ()  => { wsDot.className = 'error'; };
+      ws.onclose = ()  => { wsDot.className = ''; setTimeout(connectWS, 2000); };
+      ws.onmessage = (ev) => {
+        try { handleState(JSON.parse(ev.data)); } catch (_) {}
+      };
+    }
+
+    // ── Connect: fetch network then open WebSocket ─────────────────────────
     async function connect() {
       msgEl.textContent = 'Connecting to ' + BASE + ' …';
       let netResp;
@@ -555,62 +827,9 @@
           '\n\nStart the server:\n  python run.py scenarios/oakville_on.json --serve';
         return;
       }
-
       renderer.setNetwork(await netResp.json());
       overlay.className = 'hidden';
-
-      // Poll at ~10 Hz
-      setInterval(async () => {
-        try {
-          const r = await fetch(BASE + '/state');
-          if (!r.ok) return;
-          const state = await r.json();
-          renderer.render(state);
-
-          // ── Sync control UI from server ─────────────────────────────────
-          if (state.ctrl) {
-            const sp = state.ctrl.speed_mult ?? 1;
-            const nearest = SPEED_STEPS.reduce((a, b) =>
-              Math.abs(b - sp) < Math.abs(a - sp) ? b : a);
-            slSpeed.value = SPEED_STEPS.indexOf(nearest);
-            lblSpeed.textContent = nearest + '×';
-
-            const dm = state.ctrl.demand_mult ?? 1;
-            slDemand.value = Math.round(dm * 10);
-            lblDemand.textContent = dm.toFixed(dm < 1 ? 2 : 1) + '×';
-
-            if (state.ctrl.paused !== _paused) {
-              _paused = state.ctrl.paused;
-              playBtn.textContent = _paused ? '⏸ Paused' : '▶ Running';
-              playBtn.className   = _paused ? 'paused' : '';
-            }
-          }
-
-          // ── Sync location name ──────────────────────────────────────────
-          if (state.location && state.location !== _currentLocation) {
-            _currentLocation = state.location;
-            sLocation.textContent = state.location;
-          }
-
-          // ── Stats ───────────────────────────────────────────────────────
-          const vehs = state.vehicles || [];
-          sClock.textContent = state.clock  || '—';
-          sTime.textContent  = state.time.toFixed(1) + ' s';
-          sVehs.textContent  = vehs.length;
-          sPeds.textContent  = (state.pedestrians || []).length;
-          sFps.textContent   = renderer.stats.fps + ' fps';
-
-          // Average speed in km/h
-          if (vehs.length > 0) {
-            const avgMs = vehs.reduce((sum, v) => sum + (v.speed || 0), 0) / vehs.length;
-            sSpd.textContent = (avgMs * 3.6).toFixed(1) + ' km/h';
-          } else {
-            sSpd.textContent = '—';
-          }
-
-          updateScaleBar();
-        } catch (_) {}
-      }, 100);
+      connectWS();
     }
 
     connect();
