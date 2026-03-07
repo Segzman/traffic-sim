@@ -207,14 +207,14 @@ class TestVehicleSpawning:
 class TestDisobedience:
 
     def test_zero_disobedience_uses_class_defaults(self):
-        """At disobedience=0, T and s0 equal class defaults (no reduction)."""
+        """At disobedience=0, T and s0 equal each vehicle's class defaults (no reduction)."""
         cfg = SimConfig(disobedience=0.0, vehicle_mix_car=1.0)
         vehicles = _spawn_n(10, cfg=cfg)
-        car_vc = VEHICLE_CLASSES["car"]
         for v in vehicles:
-            # T should be close to class default (possibly affected by global slider)
-            assert v.T  >= car_vc.T * 0.999   # not reduced
-            assert v.s0 >= car_vc.s0 * 0.999
+            vc = VEHICLE_CLASSES[v.vehicle_type]
+            # T and s0 must not be reduced below the class default when disobedience=0
+            assert v.T  >= vc.T  * 0.999, f"{v.vehicle_type} T={v.T} < class default {vc.T}"
+            assert v.s0 >= vc.s0 * 0.999, f"{v.vehicle_type} s0={v.s0} < class default {vc.s0}"
 
     def test_max_disobedience_reduces_headway(self):
         """At disobedience=1.0, cars have smaller T and s0 than at 0."""
@@ -256,6 +256,49 @@ class TestDisobedience:
             f"truck T reduction ({truck_reduction:.1%})"
         )
 
+
+    def test_a_max_and_b_vary_across_drivers(self):
+        """a_max and b should be log-normally distributed, not identical clones.
+
+        NGSIM calibration (Kesting & Treiber 2008) shows CV ≈ 20 % for both
+        parameters across the driver population.  With class defaults active,
+        at least two distinct values must appear; with a config override they
+        must be exactly the configured value.
+        """
+        # ── Without override: should vary ───────────────────────────────────
+        cfg_default = SimConfig(vehicle_mix_car=1.0, vehicle_mix_van=0.0,
+                                vehicle_mix_truck=0.0, vehicle_mix_bus=0.0)
+        sim = NetworkSimulation(
+            _two_node_net(length=5000.0, num_lanes=2),
+            demand={"A": {"B": 3600.0 * 40}},
+            duration=300, seed=3, config=cfg_default,
+        )
+        for _ in range(40 * 3 + 10):
+            sim.step()
+
+        a_maxes = [v.a_max for v in sim.vehicles]
+        bs      = [v.b     for v in sim.vehicles]
+        assert len(a_maxes) >= 5, "Too few vehicles to assess variation"
+        assert len(set(round(x, 4) for x in a_maxes)) > 1, \
+            "a_max should vary across drivers (log-normal), not be identical"
+        assert len(set(round(x, 4) for x in bs)) > 1, \
+            "b should vary across drivers (log-normal), not be identical"
+
+        # ── With explicit override: must be exact ────────────────────────────
+        FIXED_A = 3.5
+        cfg_override = SimConfig(idm_a_max=FIXED_A, vehicle_mix_car=1.0,
+                                 vehicle_mix_van=0.0, vehicle_mix_truck=0.0,
+                                 vehicle_mix_bus=0.0)
+        sim2 = NetworkSimulation(
+            _two_node_net(length=5000.0, num_lanes=2),
+            demand={"A": {"B": 3600.0 * 10}},
+            duration=300, seed=3, config=cfg_override,
+        )
+        for _ in range(40):
+            sim2.step()
+        for v in sim2.vehicles:
+            assert v.a_max == pytest.approx(FIXED_A), \
+                f"Config override must pin a_max; got {v.a_max}"
 
     def test_disobedience_distribution_is_right_skewed(self):
         """Driver behaviour should cluster near-compliant, not spread uniformly.

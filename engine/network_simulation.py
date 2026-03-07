@@ -43,6 +43,27 @@ if TYPE_CHECKING:
 # Driver behaviour distribution
 # ---------------------------------------------------------------------------
 
+def _sample_lognormal(rng: random.Random, mean: float, cv: float,
+                      lo: float, hi: float) -> float:
+    """Sample from a log-normal distribution with the given mean and CV, clipped.
+
+    Log-normal is the natural choice for strictly-positive parameters like
+    acceleration and braking — it is bounded below at zero, right-skewed, and
+    matches empirical IDM calibration from NGSIM data (Kesting & Treiber 2008,
+    CV ≈ 15-25 % for a_max and b across the driver population).
+
+    Parameters
+    ----------
+    mean : desired mean of the distribution
+    cv   : coefficient of variation  (std / mean),  e.g. 0.20 for 20 %
+    lo   : hard lower clip (physics floor)
+    hi   : hard upper clip (physics ceiling)
+    """
+    sigma = math.sqrt(math.log(cv * cv + 1.0))
+    mu    = math.log(mean) - 0.5 * sigma * sigma
+    return max(lo, min(hi, rng.lognormvariate(mu, sigma)))
+
+
 def _sample_disobey(rng: random.Random, max_val: float) -> float:
     """Sample per-driver disobedience from a truncated-normal distribution.
 
@@ -373,10 +394,25 @@ class NetworkSimulation:
                 return
 
         # ── IDM base params: class defaults, overridden by global sliders ───
-        a_max = cfg.idm_a_max if (cfg and cfg.idm_a_max != 1.4) else vc.a_max
-        b     = cfg.idm_b     if (cfg and cfg.idm_b     != 2.0) else vc.b
-        T     = cfg.idm_T     if (cfg and cfg.idm_T     != 1.5) else vc.T
-        s0    = cfg.idm_s0    if (cfg and cfg.idm_s0    != 2.0) else vc.s0
+        a_max_override = cfg and cfg.idm_a_max != 1.4
+        b_override     = cfg and cfg.idm_b     != 2.0
+
+        a_max = cfg.idm_a_max if a_max_override else vc.a_max
+        b     = cfg.idm_b     if b_override     else vc.b
+        T     = cfg.idm_T     if (cfg and cfg.idm_T  != 1.5) else vc.T
+        s0    = cfg.idm_s0    if (cfg and cfg.idm_s0 != 2.0) else vc.s0
+
+        # ── Natural per-vehicle variation in acceleration & braking ──────────
+        # a_max and b are log-normally distributed across the driver population
+        # (Kesting & Treiber 2008, NGSIM calibration: CV ≈ 20 %).
+        # Only applied when the class default is in use; explicit config slider
+        # overrides produce a deterministic, uniform fleet as expected.
+        if not a_max_override:
+            a_max = _sample_lognormal(self.py_rng, a_max, cv=0.20,
+                                      lo=a_max * 0.40, hi=a_max * 2.50)
+        if not b_override:
+            b = _sample_lognormal(self.py_rng, b, cv=0.20,
+                                  lo=b * 0.40, hi=b * 2.50)
 
         # ── Disobedience: sample per-vehicle rule-breaking factor ───────────
         # Distribution: truncated-normal (mu=0.25·max, σ=0.20·max) so most
