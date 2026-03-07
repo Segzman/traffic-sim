@@ -343,6 +343,7 @@ def _build_network_sim(scenario: dict):
     continuous = bool(scenario.get("continuous_demand", False))
     start_hour = float(scenario.get("start_hour", 0.0))
     temporal_demand = bool(scenario.get("temporal_demand", False))
+    day_type = scenario.get("day_type")  # "weekday" | "weekend" | None
     auto_m3 = bool(scenario.get("auto_m3_demand", False))
     worldpop_city_slug = scenario.get("worldpop_city_slug")
     if not worldpop_city_slug:
@@ -450,6 +451,7 @@ def _build_network_sim(scenario: dict):
         continuous_demand=continuous,
         start_hour=start_hour,
         temporal_demand=temporal_demand,
+        day_type=day_type,
     )
 
 

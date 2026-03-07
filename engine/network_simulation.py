@@ -172,7 +172,10 @@ class NetworkSimulation:
         continuous_demand: bool = False,
         start_hour: float = 0.0,
         temporal_demand: bool = False,
+        day_type: str | None = None,
     ):
+        from engine.demand_profile import DayType
+
         self.network    = network
         self.demand     = demand or {}
         self.duration   = duration
@@ -185,7 +188,13 @@ class NetworkSimulation:
         self._speed_mult: float = 1.0  # hint for the HTTP server sleep loop
         self._continuous_demand = bool(continuous_demand)
         self.start_hour = float(start_hour) % 24.0
-        self.temporal_demand = bool(temporal_demand)
+        # day_type implicitly enables temporal demand when supplied
+        self.temporal_demand = bool(temporal_demand) or (day_type is not None)
+        self._day_type = (
+            DayType.WEEKEND
+            if str(day_type).lower() == "weekend"
+            else DayType.WEEKDAY
+        )
         self._spawn_horizon_s = 3600.0          # keep 1h of future demand queued
         self._spawn_scheduled_until = 0.0
 
@@ -242,30 +251,12 @@ class NetworkSimulation:
     # ------------------------------------------------------------------ #
 
     def _demand_factor(self, sim_time_s: float) -> float:
-        """Time-of-day demand multiplier (sim clock) for realistic day profile."""
+        """Time-of-day demand multiplier from the 24-hour profile lookup."""
         if not self.temporal_demand:
             return 1.0
-        h = (self.start_hour + sim_time_s / 3600.0) % 24.0
-        # Midnight low demand, AM/PM peaks.
-        if 0.0 <= h < 5.0:
-            return 0.02
-        if 5.0 <= h < 6.0:
-            return 0.05
-        if 6.0 <= h < 7.0:
-            return 0.20
-        if 7.0 <= h < 9.0:
-            return 1.00
-        if 9.0 <= h < 10.0:
-            return 0.80
-        if 10.0 <= h < 15.0:
-            return 0.45
-        if 15.0 <= h < 16.0:
-            return 0.55
-        if 16.0 <= h < 19.0:
-            return 1.00
-        if 19.0 <= h < 21.0:
-            return 0.35
-        return 0.12
+        from engine.demand_profile import profile_multiplier
+        clock_s = ((self.start_hour + sim_time_s / 3600.0) % 24.0) * 3600.0
+        return profile_multiplier(clock_s, self._day_type)
 
     def _scaled_flow_hr(self, flow_hr: float, sim_time_s: float) -> float:
         """Flow after runtime multipliers (control + config)."""
@@ -370,6 +361,22 @@ class NetworkSimulation:
         if euclidean >= _WINDING_MIN_DIST_M:
             route_len = sum(self.network.edge_length(e) for e in route)
             if route_len > _MAX_ROUTE_WINDING * euclidean:
+                return
+
+        # Mode split: walk/bike trips don't produce car-model vehicles.
+        # Only active when temporal_demand is on (M4 feature).
+        if self.temporal_demand:
+            from engine.mode_split import mode_split_probs, Mode
+            _ms_probs = mode_split_probs(euclidean)
+            _ms_r = self.py_rng.random()
+            _ms_cum = 0.0
+            _trip_mode = Mode.CAR
+            for _m in (Mode.WALK, Mode.BIKE, Mode.CAR):
+                _ms_cum += _ms_probs[_m]
+                if _ms_r < _ms_cum:
+                    _trip_mode = _m
+                    break
+            if _trip_mode != Mode.CAR:
                 return
 
         first_edge = route[0]
