@@ -257,6 +257,44 @@ class TestDisobedience:
         )
 
 
+    def test_disobedience_distribution_is_right_skewed(self):
+        """Driver behaviour should cluster near-compliant, not spread uniformly.
+
+        With a truncated-normal (mu=0.25·max, σ=0.20·max) most drivers should
+        have a T value in the upper half of the possible range (near the class
+        default), with only a minority being genuinely aggressive.
+
+        A uniform distribution would put exactly 50 % above the midpoint;
+        the truncated-normal should push that fraction well above 60 %.
+        """
+        cfg = SimConfig(disobedience=1.0, vehicle_mix_car=1.0,
+                        vehicle_mix_van=0.0, vehicle_mix_truck=0.0,
+                        vehicle_mix_bus=0.0)
+        sim = NetworkSimulation(
+            _two_node_net(length=5000.0, num_lanes=2),
+            demand={"A": {"B": 3600.0 * 80}},
+            duration=300, seed=7, config=cfg,
+        )
+        for _ in range(80 * 3 + 10):
+            sim.step()
+
+        car_vc = VEHICLE_CLASSES["car"]
+        # Midpoint between class-default T and the hard floor after max reduction
+        t_max   = car_vc.T                                      # 1.5 s
+        t_min   = max(0.4, car_vc.T * (1 - car_vc.gap_reduction))  # 0.75 s
+        midpoint = (t_max + t_min) / 2                          # 1.125 s
+
+        ts = [v.T for v in sim.vehicles]
+        assert len(ts) >= 10, "Too few vehicles to assess distribution"
+        near_compliant = sum(1 for t in ts if t > midpoint)
+        fraction = near_compliant / len(ts)
+        assert fraction > 0.60, (
+            f"Expected >60 % of drivers near-compliant (T > {midpoint:.2f} s); "
+            f"got {fraction:.1%} ({near_compliant}/{len(ts)}). "
+            f"Distribution may be uniform rather than right-skewed."
+        )
+
+
 # ---------------------------------------------------------------------------
 # 5. State payload fields
 # ---------------------------------------------------------------------------

@@ -62,7 +62,7 @@ class VehicleClass:
 VEHICLE_CLASSES: dict[str, VehicleClass] = {
     # ── Passenger car (sedan / hatchback / SUV) ─────────────────────────────
     # FHWA Class 2-3 | L=4.5 m, W=1.8 m
-    # IDM: aggressive-but-realistic urban driver (HCM free-flow headway ~1.2 s)
+    # IDM: calibrated urban driver (HCM 7e free-flow headway T=1.5 s, b=1.8 m/s²)
     "car": VehicleClass(
         type="car",
         length=4.5,  width=1.8,
