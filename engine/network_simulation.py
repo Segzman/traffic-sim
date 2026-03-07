@@ -110,6 +110,18 @@ _POOL = ThreadPoolExecutor(max_workers=_N_WORKERS, thread_name_prefix="ns-idm")
 _STOP_SPEED = 0.3
 # Deadlock threshold: stuck below _STOP_SPEED for this many consecutive seconds
 _DEADLOCK_STUCK_S = 120.0
+# Abandon threshold: vehicle removed after being stuck this long (simulates driver
+# giving up and leaving — prevents permanent ramp/deadlock accumulation).
+_VEHICLE_ABANDON_S = 300.0
+
+# Route quality guards applied at spawn time
+# Minimum euclidean O–D distance (m); shorter trips are skipped.
+_MIN_OD_DIST_M: float = 80.0
+# Maximum ratio of route_length / euclidean_distance; routes that wind much more
+# than the straight-line path are rejected (catches cloverleaf loop paths).
+_MAX_ROUTE_WINDING: float = 4.0
+# Only enforce the winding check when euclidean distance exceeds this (m).
+_WINDING_MIN_DIST_M: float = 300.0
 
 # Adaptive-dt thresholds
 _DT_NORMAL: float = 0.1   # used at speed_mult < 32
@@ -329,9 +341,28 @@ class NetworkSimulation:
 
     def _spawn_vehicle(self, origin: str, dest: str) -> None:
         """Compute route and place vehicle on the first edge."""
+        # ── O–D sanity guards ───────────────────────────────────────────────
+        o_nd = self.network.nodes.get(origin)
+        d_nd = self.network.nodes.get(dest)
+        if o_nd is None or d_nd is None:
+            return
+        euclidean = math.hypot(d_nd.x - o_nd.x, d_nd.y - o_nd.y)
+
+        # Skip trivially short O-D pairs (cloverleaf loop-ramp noise, etc.)
+        if euclidean < _MIN_OD_DIST_M:
+            return
+
         route = self.network.shortest_path(origin, dest)
         if not route:
             return
+
+        # Reject excessively winding routes: if the road path is more than
+        # _MAX_ROUTE_WINDING × the straight-line distance the vehicle would be
+        # looping through interchange ramps rather than travelling anywhere useful.
+        if euclidean >= _WINDING_MIN_DIST_M:
+            route_len = sum(self.network.edge_length(e) for e in route)
+            if route_len > _MAX_ROUTE_WINDING * euclidean:
+                return
 
         first_edge = route[0]
         edge = self.network.edges[first_edge]
@@ -726,11 +757,20 @@ class NetworkSimulation:
             if veh.lane_change_cooldown > 0.0:
                 veh.lane_change_cooldown = max(0.0, veh.lane_change_cooldown - dt)
 
-            # Deadlock tracking
+            # Deadlock / abandon tracking
             if veh.speed < _STOP_SPEED:
-                self._stuck_time[veh.id] = self._stuck_time.get(veh.id, 0.0) + dt
-                if self._stuck_time[veh.id] > _DEADLOCK_STUCK_S:
+                stuck = self._stuck_time.get(veh.id, 0.0) + dt
+                self._stuck_time[veh.id] = stuck
+                if stuck > _DEADLOCK_STUCK_S:
                     self.deadlock_detected = True
+                # Remove vehicle if it has been completely immobile too long
+                # (blocked ramp or network deadlock — driver gives up).
+                if stuck > _VEHICLE_ABANDON_S:
+                    ev_list_a = self._edge_vehicles.get(veh.current_edge)
+                    if ev_list_a and veh in ev_list_a:
+                        ev_list_a.remove(veh)
+                    to_remove.append(veh)
+                    continue
             else:
                 self._stuck_time[veh.id] = 0.0
 
