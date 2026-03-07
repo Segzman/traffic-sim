@@ -213,6 +213,14 @@ class NetworkSimulation:
         self._stuck_time: dict[int, float] = {}
         self.deadlock_detected = False
 
+        # Network exit nodes: dead-ends where the OSM bbox clips a road.
+        # Vehicles re-routed here will drive off the edge of the map instead
+        # of vanishing mid-road.
+        self._exit_nodes: frozenset[str] = frozenset(
+            nid for nid in self.network.nodes
+            if not self.network._adj.get(nid)
+        )
+
     # ------------------------------------------------------------------ #
     # Speed multiplier / adaptive dt
     # ------------------------------------------------------------------ #
@@ -763,9 +771,33 @@ class NetworkSimulation:
                 self._stuck_time[veh.id] = stuck
                 if stuck > _DEADLOCK_STUCK_S:
                     self.deadlock_detected = True
-                # Remove vehicle if it has been completely immobile too long
-                # (blocked ramp or network deadlock — driver gives up).
-                if stuck > _VEHICLE_ABANDON_S:
+                # After _VEHICLE_ABANDON_S, re-route to the nearest network
+                # boundary (dead-end node) so the vehicle drives itself off the
+                # map rather than vanishing.
+                if stuck > _VEHICLE_ABANDON_S and self._exit_nodes:
+                    curr_to = self.network.edges[veh.current_edge].to_node
+                    cn = self.network.nodes.get(curr_to)
+                    if cn is not None:
+                        best_exit = min(
+                            self._exit_nodes,
+                            key=lambda nid: math.hypot(
+                                self.network.nodes[nid].x - cn.x,
+                                self.network.nodes[nid].y - cn.y,
+                            ),
+                        )
+                        if best_exit != curr_to:
+                            exit_route = self.network.shortest_path(
+                                curr_to, best_exit
+                            )
+                            if exit_route:
+                                # Replace remaining route with boundary path.
+                                veh.route = (
+                                    list(veh.route[: veh.route_index + 1])
+                                    + exit_route
+                                )
+                                self._stuck_time[veh.id] = 0.0
+                                continue  # let vehicle find its own way out
+                    # Fallback: truly unreachable — remove as last resort.
                     ev_list_a = self._edge_vehicles.get(veh.current_edge)
                     if ev_list_a and veh in ev_list_a:
                         ev_list_a.remove(veh)
