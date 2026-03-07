@@ -66,6 +66,29 @@ function vehicleColour(speed, limit) {
   return COLOUR.VEHICLE_CONGESTED;
 }
 
+// Blend two hex colours at fraction t (0=all a, 1=all b)
+function _blendColour(a, b, t) {
+  const parse = h => [
+    parseInt(h.slice(1,3),16),
+    parseInt(h.slice(3,5),16),
+    parseInt(h.slice(5,7),16),
+  ];
+  const [ar,ag,ab_] = parse(a);
+  const [br,bg,bb_] = parse(b);
+  const r = Math.round(ar + (br-ar)*t);
+  const g = Math.round(ag + (bg-ag)*t);
+  const bl= Math.round(ab_ + (bb_-ab_)*t);
+  return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${bl.toString(16).padStart(2,'0')}`;
+}
+
+// Apply a subtle type-specific colour tint over the speed colour
+function _typeColourOverlay(type, base) {
+  if (type === 'truck') return _blendColour(base, '#ff8f00', 0.25);  // warm amber
+  if (type === 'bus')   return _blendColour(base, '#29b6f6', 0.28);  // light blue
+  if (type === 'van')   return _blendColour(base, '#ce93d8', 0.18);  // soft purple
+  return base;  // cars: pure speed colour
+}
+
 function signalColour(state) {
   if (state === 'green')  return COLOUR.SIGNAL_GREEN;
   if (state === 'yellow') return COLOUR.SIGNAL_YELLOW;
@@ -592,12 +615,15 @@ class TrafficRenderer {
   _drawVehicles(vehicles) {
     const ctx = this._ctx;
     const S   = this._S();
-    const VW  = Math.max(2.5, 2.2 * S);
-    const VL  = Math.max(4.5, 4.5 * S);
 
     for (const v of vehicles) {
       const e = this._net.edges[v.edge_id];
       if (!e) continue;
+
+      // Physical dimensions → pixels  (fallback to generic car if missing)
+      const VL = Math.max(4, (v.length || 4.5) * S);
+      const VW = Math.max(2, (v.width  || 1.8) * S);
+
       const pts = this._edgePts(e);
       if (pts.length < 2) continue;
 
@@ -608,7 +634,8 @@ class TrafficRenderer {
       const { x, y, ang, rnx, rny } = this._posOnPolyline(pts, v.position_s || 0);
       const cx  = this._tx(x + rnx * lateralM);
       const cy  = this._ty(y + rny * lateralM);
-      const col = vehicleColour(v.speed || 0, v.speed_limit || e.speed_limit || 13.9);
+      const baseCol = vehicleColour(v.speed || 0, v.speed_limit || e.speed_limit || 13.9);
+      const col     = _typeColourOverlay(v.type, baseCol);
 
       ctx.save();
       ctx.translate(cx, cy);

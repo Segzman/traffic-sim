@@ -117,8 +117,9 @@ def infer_edge_attributes(edge: dict) -> dict:
         speed_limit = _FALLBACK_SPEED_MS
         speed_flag = QualityFlag.RED
 
-    result["num_lanes"] = num_lanes
+    result["num_lanes"]   = num_lanes
     result["speed_limit"] = speed_limit
+    result["road_type"]   = hw_class        # OSM highway tag for vehicle-mix lookup
     result["quality_flags"] = {
         "lanes": lanes_flag.value,
         "speed_limit": speed_flag.value,

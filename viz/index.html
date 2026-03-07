@@ -416,6 +416,40 @@
         <span class="dp-val" data-lbl="demand_scale">1.0×</span>
       </div>
     </details>
+    <details id="fleet-mix-section">
+      <summary>Fleet Mix <button id="truck-lanes-btn" title="Toggle truck/bus lane discipline" style="float:right;margin-top:-2px;padding:1px 7px;font-size:10px;cursor:pointer;border-radius:3px;border:1px solid rgba(138,179,208,0.25);background:rgba(138,179,208,0.1);color:#8ab3d0;">🚛 lanes ✔</button></summary>
+      <div class="dp-row">
+        <span class="dp-label" id="lbl-mix-car"  title="Passenger cars (4.5 m × 1.8 m)">cars</span>
+        <input type="range" min="0" max="1" step="0.01" data-param="vehicle_mix_car" value="-1" id="sl-mix-car">
+        <span class="dp-val" data-lbl="vehicle_mix_car" id="pct-mix-car">auto</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" id="lbl-mix-van"  title="Vans / light commercial (5.5 m × 2.1 m)">vans</span>
+        <input type="range" min="0" max="1" step="0.01" data-param="vehicle_mix_van" value="-1" id="sl-mix-van">
+        <span class="dp-val" data-lbl="vehicle_mix_van" id="pct-mix-van">auto</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" id="lbl-mix-truck" title="Heavy trucks (12 m × 2.5 m)">trucks</span>
+        <input type="range" min="0" max="0.5" step="0.01" data-param="vehicle_mix_truck" value="-1" id="sl-mix-truck">
+        <span class="dp-val" data-lbl="vehicle_mix_truck" id="pct-mix-truck">auto</span>
+      </div>
+      <div class="dp-row">
+        <span class="dp-label" id="lbl-mix-bus"  title="Transit buses (14 m × 2.5 m)">buses</span>
+        <input type="range" min="0" max="0.3" step="0.01" data-param="vehicle_mix_bus" value="-1" id="sl-mix-bus">
+        <span class="dp-val" data-lbl="vehicle_mix_bus" id="pct-mix-bus">auto</span>
+      </div>
+    </details>
+    <details id="behaviour-section">
+      <summary>Behaviour</summary>
+      <div class="dp-row">
+        <span class="dp-label" title="Rule-breaking intensity: speeding, tailgating, aggressive lane changes. Physics caps prevent trucks from becoming as reckless as cars.">disobey</span>
+        <input type="range" min="0" max="1" step="0.01" data-param="disobedience" value="0">
+        <span class="dp-val" data-lbl="disobedience">0 %</span>
+      </div>
+      <div style="padding:2px 0 4px 0;font-size:9px;color:#5a7a8a;line-height:1.4;" id="disobey-desc">
+        0% = law-abiding · all classes comply
+      </div>
+    </details>
     <details>
       <summary>Weather</summary>
       <div class="dp-row">
@@ -683,6 +717,9 @@
       signal_cycle: 90.0, signal_green_ratio: 0.5,
       demand_scale: 1.0,
       weather_v0_mult: 1.0, weather_s0_mult: 1.0, weather_T_mult: 1.0,
+      vehicle_mix_car: -1.0, vehicle_mix_van: -1.0,
+      vehicle_mix_truck: -1.0, vehicle_mix_bus: -1.0,
+      disobedience: 0.0,
     };
 
     const PRESETS = {
@@ -699,6 +736,11 @@
       signal_cycle:       v => Math.round(+v) + ' s',
       signal_green_ratio: v => Math.round(+v * 100) + '%',
       demand_scale:       v => (+v).toFixed(1) + '×',
+      vehicle_mix_car:    v => (+v) < 0 ? 'auto' : Math.round(+v * 100) + ' %',
+      vehicle_mix_van:    v => (+v) < 0 ? 'auto' : Math.round(+v * 100) + ' %',
+      vehicle_mix_truck:  v => (+v) < 0 ? 'auto' : Math.round(+v * 100) + ' %',
+      vehicle_mix_bus:    v => (+v) < 0 ? 'auto' : Math.round(+v * 100) + ' %',
+      disobedience:       v => Math.round(+v * 100) + ' %',
     };
     function fmtParam(name, val) {
       return (PARAM_FMT[name] || (v => (+v).toFixed(2)))(val);
@@ -734,6 +776,54 @@
       postControl({ params });
     }
     setTimeout(applyStoredParams, 600);
+
+    // ── Truck lanes toggle ────────────────────────────────────────────────
+    let _truckDiscipline = true;
+    const truckLanesBtn = document.getElementById('truck-lanes-btn');
+    if (truckLanesBtn) {
+      const saved = localStorage.getItem('sim_truck_lane_discipline');
+      if (saved !== null) _truckDiscipline = (saved === 'true');
+      truckLanesBtn.textContent = '🚛 lanes ' + (_truckDiscipline ? '✔' : '✖');
+      truckLanesBtn.style.color = _truckDiscipline ? '#8ab3d0' : '#ff5370';
+      truckLanesBtn.addEventListener('click', (e) => {
+        e.stopPropagation();  // don't toggle <details>
+        _truckDiscipline = !_truckDiscipline;
+        truckLanesBtn.textContent = '🚛 lanes ' + (_truckDiscipline ? '✔' : '✖');
+        truckLanesBtn.style.color = _truckDiscipline ? '#8ab3d0' : '#ff5370';
+        localStorage.setItem('sim_truck_lane_discipline', _truckDiscipline);
+        postControl({ params: { truck_lane_discipline: _truckDiscipline } });
+      });
+    }
+
+    // ── Disobedience description update ──────────────────────────────────
+    const disobeyDesc = document.getElementById('disobey-desc');
+    function updateDisobeyDesc(v) {
+      if (!disobeyDesc) return;
+      const pct = Math.round(v * 100);
+      if (pct === 0)      disobeyDesc.textContent = '0% = law-abiding · all classes comply';
+      else if (pct < 25)  disobeyDesc.textContent = `${pct}% = mild speeding, tighter gaps`;
+      else if (pct < 50)  disobeyDesc.textContent = `${pct}% = speeding, tailgating, frequent LC`;
+      else if (pct < 75)  disobeyDesc.textContent = `${pct}% = aggressive · trucks capped at 30%`;
+      else                disobeyDesc.textContent = `${pct}% = max aggression · cars & vans race`;
+    }
+    document.querySelector('[data-param="disobedience"]')?.addEventListener('input', function() {
+      updateDisobeyDesc(+this.value);
+    });
+
+    // ── Load vehicle class specs from API and show as sub-labels ─────────
+    (async () => {
+      try {
+        const r = await fetch(BASE + '/vehicle_classes');
+        if (!r.ok) return;
+        const classes = await r.json();
+        const nameMap = { car: 'lbl-mix-car', van: 'lbl-mix-van',
+                          truck: 'lbl-mix-truck', bus: 'lbl-mix-bus' };
+        for (const [type, vc] of Object.entries(classes)) {
+          const el = document.getElementById(nameMap[type]);
+          if (el) el.title = `${type}  ${vc.length} m × ${vc.width} m`;
+        }
+      } catch (_) {}
+    })();
 
     // Preset buttons
     document.querySelectorAll('.preset-btn').forEach(btn => {

@@ -22,6 +22,7 @@ class Edge:
     num_lanes: int
     speed_limit: float              # m/s
     geometry: list = field(default_factory=list)  # list of (x, y) Mercator waypoints
+    road_type: str = "primary"      # OSM highway tag (e.g. "motorway", "residential")
 
 
 @dataclass

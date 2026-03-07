@@ -32,6 +32,7 @@ from engine.agents import Vehicle
 from engine.idm_vec import idm_acceleration_vec
 from engine.network import Network
 from engine.metrics import TripRecord, BatchMetrics
+from engine.vehicle_classes import VEHICLE_CLASSES, mix_for_road_type
 
 if TYPE_CHECKING:
     from engine.pedestrians import Pedestrian
@@ -219,29 +220,75 @@ class NetworkSimulation:
             return  # entry blocked
 
         num_lanes = edge.num_lanes
-        if num_lanes <= 1:
-            spawn_lane = 0
-        else:
-            weights    = [0.40] + [0.60 / (num_lanes - 1)] * (num_lanes - 1)
-            spawn_lane = int(self.py_rng.choices(range(num_lanes), weights=weights)[0])
-
-        # Apply config IDM overrides if a SimConfig is attached
+        # ── Vehicle class sampling ──────────────────────────────────────────
         cfg = self.config
-        a_max = cfg.idm_a_max if cfg else 1.4
-        b     = cfg.idm_b     if cfg else 2.0
-        T     = cfg.idm_T     if cfg else 1.5
-        s0    = cfg.idm_s0    if cfg else 2.0
+
+        # Road-type baseline (HCM) optionally overridden by SimConfig sliders
+        road_type = edge.road_type
+        baseline  = mix_for_road_type(road_type)
+
+        raw = {
+            "car":   (cfg.vehicle_mix_car   if (cfg and cfg.vehicle_mix_car   >= 0)
+                      else baseline["car"]),
+            "van":   (cfg.vehicle_mix_van   if (cfg and cfg.vehicle_mix_van   >= 0)
+                      else baseline["van"]),
+            "truck": (cfg.vehicle_mix_truck if (cfg and cfg.vehicle_mix_truck >= 0)
+                      else baseline["truck"]),
+            "bus":   (cfg.vehicle_mix_bus   if (cfg and cfg.vehicle_mix_bus   >= 0)
+                      else baseline["bus"]),
+        }
+        types = list(raw.keys())
+        total = sum(raw.values()) or 1.0
+        wts   = [raw[t] / total for t in types]
+        vtype = self.py_rng.choices(types, weights=wts)[0]
+        vc    = VEHICLE_CLASSES[vtype]
+
+        # ── Lane selection (enforce truck/bus right-lane discipline) ────────
+        discipline = cfg.truck_lane_discipline if cfg else True
+        if discipline:
+            max_lane = min(num_lanes - 1, vc.lane_max)
+        else:
+            max_lane = num_lanes - 1
+        allowed = list(range(max_lane + 1))
+        if len(allowed) <= 1:
+            spawn_lane = allowed[0] if allowed else 0
+        else:
+            w_allowed = [0.40] + [0.60 / (len(allowed) - 1)] * (len(allowed) - 1)
+            spawn_lane = int(self.py_rng.choices(allowed, weights=w_allowed)[0])
+
+        # ── IDM base params: class defaults, overridden by global sliders ───
+        a_max = cfg.idm_a_max if (cfg and cfg.idm_a_max != 1.4) else vc.a_max
+        b     = cfg.idm_b     if (cfg and cfg.idm_b     != 2.0) else vc.b
+        T     = cfg.idm_T     if (cfg and cfg.idm_T     != 1.5) else vc.T
+        s0    = cfg.idm_s0    if (cfg and cfg.idm_s0    != 2.0) else vc.s0
+
+        # ── Disobedience: sample per-vehicle rule-breaking factor ───────────
+        disobey = 0.0
+        if cfg and cfg.disobedience > 0.0:
+            disobey = self.py_rng.uniform(0.0, cfg.disobedience * vc.max_disobedience)
+
+        # Apply disobedience multipliers (physics-capped per class)
+        v0  = edge.speed_limit * vc.speed_factor * (1.0 + disobey * vc.speed_excess)
+        T   = max(0.4, T  * (1.0 - disobey * vc.gap_reduction))
+        s0  = max(0.5, s0 * (1.0 - disobey * vc.gap_reduction))
+        pol = max(0.0, 0.3 * (1.0 - disobey * vc.politeness_factor))
+        dat = max(0.0, 0.2 * (1.0 - 0.7 * disobey))   # delta_a_thr
 
         v = Vehicle(
             id=self._next_vid,
             lane_id=spawn_lane,
             position_s=1.0,
-            speed=edge.speed_limit,
-            v0=edge.speed_limit,
+            speed=edge.speed_limit * vc.speed_factor,
+            v0=v0,
             s0=s0,
             T=T,
             a_max=a_max,
             b=b,
+            length=vc.length,
+            width=vc.width,
+            vehicle_type=vtype,
+            politeness=pol,
+            delta_a_thr=dat,
             route=route,
             route_index=0,
             current_edge=first_edge,
@@ -423,9 +470,20 @@ class NetworkSimulation:
                                 fol = u
                     return ldr, fol
 
+                # Respect truck/bus lane discipline: don't attempt moves that
+                # would exceed the vehicle class's lane_max constraint.
+                discipline = cfg.truck_lane_discipline if cfg else True
+                if discipline:
+                    vc_info = VEHICLE_CLASSES.get(veh.vehicle_type)
+                    veh_lane_max = vc_info.lane_max if vc_info else 99
+                else:
+                    veh_lane_max = 99
+
                 cur_ldr, cur_fol = _neighbors(veh.lane_id)
                 for tgt in [veh.lane_id - 1, veh.lane_id + 1]:
                     if tgt < 0 or tgt >= edge.num_lanes:
+                        continue
+                    if tgt > veh_lane_max:   # lane discipline — skip left moves
                         continue
                     tgt_ldr, tgt_fol = _neighbors(tgt)
                     if mobil_lane_change(

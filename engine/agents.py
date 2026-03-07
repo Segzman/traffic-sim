@@ -10,7 +10,9 @@ class Vehicle:
     lane_id: int
     position_s: float       # arc length along lane (m)
     speed: float            # m/s
-    length: float = 4.5     # m
+    length: float = 4.5     # m  (bumper-to-bumper; set at spawn from VehicleClass)
+    width:  float = 1.8     # m  (set at spawn from VehicleClass)
+    vehicle_type: str = "car"   # "car" | "van" | "truck" | "bus"
     # IDM params
     v0: float = 30.0        # desired speed (m/s)
     s0: float = 2.0         # minimum jam gap (m)

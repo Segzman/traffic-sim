@@ -155,6 +155,7 @@ def _scenario_from_import(scenario: dict) -> dict:
             "to_node":     tn,
             "num_lanes":   int(e.get("num_lanes",  1)),
             "speed_limit": float(e.get("speed_limit", 8.3)),
+            "road_type":   str(e.get("road_type", "primary")),
         }
 
         # Build geometry list [[x,y], ...] from via_nodes if not present
@@ -267,6 +268,7 @@ def _build_network_sim(scenario: dict):
                 num_lanes=num_lanes,
                 speed_limit=speed_lim,
                 geometry=geom,
+                road_type=str(e.get("road_type", "primary")),
             ))
 
         # Build signal plans for signal nodes.
@@ -305,6 +307,7 @@ def _build_network_sim(scenario: dict):
             num_lanes=num_lanes,
             speed_limit=speed_lim,
             geometry=[[0.0, 0.0], [length, 0.0]],
+            road_type=str(road.get("road_type", "primary")),
         ))
         signal_plans = {}
 
@@ -492,6 +495,7 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                     num_lanes=int(ed.get("num_lanes", 1)),
                     speed_limit=float(ed.get("speed_limit", 8.3)),
                     geometry=ed.get("geometry", []),
+                    road_type=str(ed.get("road_type", "primary")),
                 ))
             # Higher flow (400 veh/hr total, 60 pairs) keeps ~20-50 cars
             # on screen at steady state during the morning peak window.
@@ -554,6 +558,9 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                         net.edges[v.current_edge].speed_limit
                         if v.current_edge in net.edges else 13.9
                     ),
+                    "length":     round(v.length, 1),
+                    "width":      round(v.width, 2),
+                    "type":       v.vehicle_type,
                 }
                 for v in s.vehicles
             ]
@@ -618,6 +625,12 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
 
             elif path == "/state":
                 self._json(200, _state_payload())
+
+            elif path == "/vehicle_classes":
+                from engine.vehicle_classes import VEHICLE_CLASSES
+                import dataclasses as _dc
+                body = {k: _dc.asdict(vc) for k, vc in VEHICLE_CLASSES.items()}
+                self._json(200, json.dumps(body).encode())
 
             elif path == "/ws":
                 ws_key = self.headers.get("Sec-WebSocket-Key", "")

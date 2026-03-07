@@ -50,6 +50,28 @@ class SimConfig:
     demand_scale: float = 1.0   # multiplier on all OD flows
 
     # ------------------------------------------------------------------
+    # Vehicle class mix
+    # -1.0 = use HCM road-type baseline (motorway/arterial/residential)
+    #  0.0–1.0 = explicit override (normalised across all four types at spawn)
+    # ------------------------------------------------------------------
+    vehicle_mix_car:   float = -1.0
+    vehicle_mix_van:   float = -1.0
+    vehicle_mix_truck: float = -1.0
+    vehicle_mix_bus:   float = -1.0
+
+    # ------------------------------------------------------------------
+    # Driver behaviour / disobedience
+    # ------------------------------------------------------------------
+    # Global disobedience intensity (0 = law-abiding, 1 = maximum aggression).
+    # Each vehicle class has physics-based caps; trucks never become as reckless
+    # as cars regardless of this value.  Applied at spawn to v0, T, s0, politeness.
+    disobedience: float = 0.0
+
+    # When True, trucks and buses are restricted to the rightmost lane (lane 0).
+    # When False, they can occupy any lane (useful for studying mixed-lane traffic).
+    truck_lane_discipline: bool = True
+
+    # ------------------------------------------------------------------
     # Weather multipliers  (applied to IDM params each step)
     # ------------------------------------------------------------------
     weather_v0_mult: float = 1.0   # desired-speed multiplier (rain → 0.9)
