@@ -66,8 +66,8 @@ VEHICLE_CLASSES: dict[str, VehicleClass] = {
     "car": VehicleClass(
         type="car",
         length=4.5,  width=1.8,
-        a_max=1.6,   b=2.8,
-        T=1.2,       s0=2.0,
+        a_max=1.6,   b=1.8,
+        T=1.5,       s0=2.0,
         speed_factor=1.00,
         proportion=0.80,
         lane_max=99,                      # can use any lane
@@ -135,16 +135,18 @@ VEHICLE_CLASSES: dict[str, VehicleClass] = {
 # OSM highway tags → {type: proportion}
 _ROAD_MIX: dict[str, dict[str, float]] = {
     # High-speed divided highway — more freight, fewer buses
-    "motorway":        {"car": 0.70, "van": 0.10, "truck": 0.17, "bus": 0.03},
-    "motorway_link":   {"car": 0.70, "van": 0.10, "truck": 0.17, "bus": 0.03},
-    "trunk":           {"car": 0.72, "van": 0.10, "truck": 0.15, "bus": 0.03},
-    "trunk_link":      {"car": 0.72, "van": 0.10, "truck": 0.15, "bus": 0.03},
+    # Truck % calibrated to FHWA empirical range 8-15 % for urban freeways
+    "motorway":        {"car": 0.75, "van": 0.10, "truck": 0.12, "bus": 0.03},
+    "motorway_link":   {"car": 0.75, "van": 0.10, "truck": 0.12, "bus": 0.03},
+    "trunk":           {"car": 0.75, "van": 0.10, "truck": 0.12, "bus": 0.03},
+    "trunk_link":      {"car": 0.75, "van": 0.10, "truck": 0.12, "bus": 0.03},
 
     # Urban arterial — standard mix
-    "primary":         {"car": 0.80, "van": 0.10, "truck": 0.07, "bus": 0.03},
-    "primary_link":    {"car": 0.80, "van": 0.10, "truck": 0.07, "bus": 0.03},
-    "secondary":       {"car": 0.80, "van": 0.10, "truck": 0.07, "bus": 0.03},
-    "secondary_link":  {"car": 0.80, "van": 0.10, "truck": 0.07, "bus": 0.03},
+    # Truck % calibrated to HCM 7e arterial range 2-5 %
+    "primary":         {"car": 0.83, "van": 0.10, "truck": 0.04, "bus": 0.03},
+    "primary_link":    {"car": 0.83, "van": 0.10, "truck": 0.04, "bus": 0.03},
+    "secondary":       {"car": 0.83, "van": 0.10, "truck": 0.04, "bus": 0.03},
+    "secondary_link":  {"car": 0.83, "van": 0.10, "truck": 0.04, "bus": 0.03},
 
     # Collector / local — mostly private cars
     "tertiary":        {"car": 0.85, "van": 0.12, "truck": 0.02, "bus": 0.01},

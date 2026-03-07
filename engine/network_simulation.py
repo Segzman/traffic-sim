@@ -98,6 +98,9 @@ class NetworkSimulation:
         pedestrians: list | None = None,
         config: "SimConfig | None" = None,
         compute_backend: str = "auto",
+        continuous_demand: bool = False,
+        start_hour: float = 0.0,
+        temporal_demand: bool = False,
     ):
         self.network    = network
         self.demand     = demand or {}
@@ -109,6 +112,11 @@ class NetworkSimulation:
         self.time       = 0.0
         self.config     = config        # SimConfig or None
         self._speed_mult: float = 1.0  # hint for the HTTP server sleep loop
+        self._continuous_demand = bool(continuous_demand)
+        self.start_hour = float(start_hour) % 24.0
+        self.temporal_demand = bool(temporal_demand)
+        self._spawn_horizon_s = 3600.0          # keep 1h of future demand queued
+        self._spawn_scheduled_until = 0.0
 
         self._signal_plans = signal_plans or {}
         self.pedestrians: list[Pedestrian] = pedestrians or []
@@ -154,21 +162,90 @@ class NetworkSimulation:
     # Build spawn schedule from demand matrix
     # ------------------------------------------------------------------ #
 
+    def _demand_factor(self, sim_time_s: float) -> float:
+        """Time-of-day demand multiplier (sim clock) for realistic day profile."""
+        if not self.temporal_demand:
+            return 1.0
+        h = (self.start_hour + sim_time_s / 3600.0) % 24.0
+        # Midnight low demand, AM/PM peaks.
+        if 0.0 <= h < 5.0:
+            return 0.02
+        if 5.0 <= h < 6.0:
+            return 0.05
+        if 6.0 <= h < 7.0:
+            return 0.20
+        if 7.0 <= h < 9.0:
+            return 1.00
+        if 9.0 <= h < 10.0:
+            return 0.80
+        if 10.0 <= h < 15.0:
+            return 0.45
+        if 15.0 <= h < 16.0:
+            return 0.55
+        if 16.0 <= h < 19.0:
+            return 1.00
+        if 19.0 <= h < 21.0:
+            return 0.35
+        return 0.12
+
+    def _scaled_flow_hr(self, flow_hr: float, sim_time_s: float) -> float:
+        """Flow after runtime multipliers (control + config)."""
+        cfg_scale = (self.config.demand_scale if self.config else 1.0)
+        tod = self._demand_factor(sim_time_s)
+        return max(0.0, float(flow_hr) * self._demand_mult * float(cfg_scale) * tod)
+
+    def _generate_spawn_events(
+        self,
+        t_start: float,
+        t_end: float,
+    ) -> list[tuple[float, str, str]]:
+        """Generate Poisson spawn events in [t_start, t_end)."""
+        events: list[tuple[float, str, str]] = []
+        if t_end <= t_start:
+            return events
+
+        # Piecewise-constant rate over short windows to support temporal demand.
+        seg = 900.0  # 15 min segments
+        seg_start = float(t_start)
+        while seg_start < t_end:
+            seg_end = min(t_end, seg_start + seg)
+            mid = 0.5 * (seg_start + seg_end)
+            for origin, dests in self.demand.items():
+                for dest, flow_hr in dests.items():
+                    scaled = self._scaled_flow_hr(flow_hr, mid)
+                    if scaled <= 0.0:
+                        continue
+                    rate_s = scaled / 3600.0
+                    mean_hw = 1.0 / rate_s
+                    t = float(seg_start + self.rng.exponential(mean_hw))
+                    while t < seg_end:
+                        events.append((t, origin, dest))
+                        t += float(self.rng.exponential(mean_hw))
+            seg_start = seg_end
+        events.sort()
+        return events
+
+    def _extend_spawn_horizon_if_needed(self) -> None:
+        """Extend queued demand window for long-running live simulations."""
+        if not self._continuous_demand:
+            return
+        # Refill when less than 5 minutes of future events remain.
+        if self.time + 300.0 < self._spawn_scheduled_until:
+            return
+        start = max(self._spawn_scheduled_until, self.time)
+        end = start + self._spawn_horizon_s
+        events = self._generate_spawn_events(start, end)
+        self._spawn_queue.extend(events)
+        self._spawn_scheduled_until = end
+
     def _build_spawn_queue(self) -> None:
         """Convert demand flows to Poisson spawn events (stored in a deque)."""
-        events: list[tuple[float, str, str]] = []
-        for origin, dests in self.demand.items():
-            for dest, flow_hr in dests.items():
-                if flow_hr <= 0:
-                    continue
-                rate_s   = flow_hr / 3600.0
-                mean_hw  = 1.0 / rate_s
-                t = float(self.rng.exponential(mean_hw))
-                while t < self.duration:
-                    events.append((t, origin, dest))
-                    t += float(self.rng.exponential(mean_hw))
-        events.sort()
+        end = self.duration
+        if self._continuous_demand:
+            end = max(self.duration, self._spawn_horizon_s)
+        events = self._generate_spawn_events(0.0, end)
         self._spawn_queue = deque(events)
+        self._spawn_scheduled_until = end
 
     def set_demand_mult(self, mult: float) -> None:
         """Rebuild future spawn events with demand scaled by *mult*.
@@ -177,31 +254,15 @@ class NetworkSimulation:
         current simulation time using the scaled demand rates.
         """
         self._demand_mult = max(0.0, float(mult))
-        # Keep only events that have already been consumed (t <= now)
-        past = deque((t, o, d) for t, o, d in self._spawn_queue if t <= self.time)
-        self._spawn_queue = past
+        end = self.duration
+        if self._continuous_demand:
+            end = max(self._spawn_scheduled_until, self.time + self._spawn_horizon_s)
+        if end <= self.time:
+            end = self.time + self._spawn_horizon_s
 
-        if self._demand_mult <= 0.0:
-            return
-
-        events: list[tuple[float, str, str]] = []
-        for origin, dests in self.demand.items():
-            for dest, flow_hr in dests.items():
-                if flow_hr <= 0:
-                    continue
-                cfg_scale = (self.config.demand_scale if self.config else 1.0)
-                scaled  = flow_hr * self._demand_mult * cfg_scale
-                rate_s  = scaled / 3600.0
-                mean_hw = 1.0 / rate_s
-                t = self.time + float(self.rng.exponential(mean_hw))
-                while t < self.duration:
-                    events.append((t, origin, dest))
-                    t += float(self.rng.exponential(mean_hw))
-        events.sort()
-        self._spawn_queue.extend(events)
-        # Re-sort the full queue (past events at front are already in order)
-        sorted_q = sorted(self._spawn_queue)
-        self._spawn_queue = deque(sorted_q)
+        events = self._generate_spawn_events(self.time, end)
+        self._spawn_queue = deque(events)
+        self._spawn_scheduled_until = end
 
     # ------------------------------------------------------------------ #
     # Vehicle spawn
@@ -215,10 +276,6 @@ class NetworkSimulation:
 
         first_edge = route[0]
         edge = self.network.edges[first_edge]
-
-        existing = self._edge_vehicles.get(first_edge, [])
-        if any(v.position_s < 15.0 for v in existing):
-            return  # entry blocked
 
         num_lanes = edge.num_lanes
         # ── Vehicle class sampling ──────────────────────────────────────────
@@ -254,8 +311,28 @@ class NetworkSimulation:
         if len(allowed) <= 1:
             spawn_lane = allowed[0] if allowed else 0
         else:
-            w_allowed = [0.40] + [0.60 / (len(allowed) - 1)] * (len(allowed) - 1)
-            spawn_lane = int(self.py_rng.choices(allowed, weights=w_allowed)[0])
+            # Prefer lanes with more entry space to avoid concentrated jam overlap.
+            existing = self._edge_vehicles.get(first_edge, [])
+            lane_space: list[float] = []
+            for lane in allowed:
+                lead_pos = min(
+                    (v.position_s for v in existing if v.lane_id == lane),
+                    default=1e9,
+                )
+                lane_space.append(float(lead_pos))
+            entry_clearance = max(8.0, vc.length + vc.s0 + 2.0)
+            free_lanes = [lane for lane, lead in zip(allowed, lane_space) if lead > entry_clearance]
+            if free_lanes:
+                spawn_lane = int(self.py_rng.choice(free_lanes))
+            else:
+                return  # all allowed lanes blocked at entry
+
+        # Single-lane case still needs entry blocking.
+        if len(allowed) <= 1:
+            existing = self._edge_vehicles.get(first_edge, [])
+            entry_clearance = max(8.0, vc.length + vc.s0 + 2.0)
+            if any(v.lane_id == spawn_lane and v.position_s <= entry_clearance for v in existing):
+                return
 
         # ── IDM base params: class defaults, overridden by global sliders ───
         a_max = cfg.idm_a_max if (cfg and cfg.idm_a_max != 1.4) else vc.a_max
@@ -474,11 +551,18 @@ class NetworkSimulation:
                 # Respect truck/bus lane discipline: don't attempt moves that
                 # would exceed the vehicle class's lane_max constraint.
                 discipline = cfg.truck_lane_discipline if cfg else True
+                vc_info = VEHICLE_CLASSES.get(veh.vehicle_type)
                 if discipline:
-                    vc_info = VEHICLE_CLASSES.get(veh.vehicle_type)
                     veh_lane_max = vc_info.lane_max if vc_info else 99
                 else:
                     veh_lane_max = 99
+
+                # When discipline is disabled for normally right-lane-restricted
+                # classes (truck/bus), suppress the right-lane drift bias so
+                # vehicles genuinely spread across all lanes rather than
+                # gravitating back to lane 0.
+                normally_restricted = vc_info is not None and vc_info.lane_max == 0
+                apply_right_bias = discipline or not normally_restricted
 
                 cur_ldr, cur_fol = _neighbors(veh.lane_id)
                 for tgt in [veh.lane_id - 1, veh.lane_id + 1]:
@@ -492,7 +576,7 @@ class NetworkSimulation:
                         politeness=politeness,
                         b_safe=b_safe,
                         delta_a_thr=0.1,
-                        bias_right=(tgt < veh.lane_id),
+                        bias_right=(tgt < veh.lane_id) and apply_right_bias,
                         moving_right=(tgt < veh.lane_id),
                     ):
                         by_lane.setdefault(veh.lane_id, []).remove(veh)
@@ -505,6 +589,45 @@ class NetworkSimulation:
     # ------------------------------------------------------------------ #
     # Euler integration + edge transitions
     # ------------------------------------------------------------------ #
+
+    def _entry_blocked(
+        self,
+        edge_id: str,
+        lane_id: int,
+        vehicle: Vehicle,
+        *,
+        enter_position: float = 0.0,
+    ) -> bool:
+        """Return True when target edge insertion would violate headway."""
+        min_gap = max(0.5, vehicle.s0)
+        for other in self._edge_vehicles.get(edge_id, []):
+            if other.lane_id != lane_id:
+                continue
+            gap = other.position_s - float(enter_position) - vehicle.length
+            if gap < min_gap:
+                return True
+        return False
+
+    def _enforce_no_overlap(self) -> None:
+        """Clamp lane-wise positions so jammed vehicles cannot overlap."""
+        for edge_id, evs in self._edge_vehicles.items():
+            if not evs:
+                continue
+            by_lane: dict[int, list[Vehicle]] = {}
+            for v in evs:
+                by_lane.setdefault(v.lane_id, []).append(v)
+
+            for lane_vehs in by_lane.values():
+                lane_vehs.sort(key=lambda v: v.position_s, reverse=True)
+                for i in range(1, len(lane_vehs)):
+                    leader = lane_vehs[i - 1]
+                    follower = lane_vehs[i]
+                    min_gap = max(0.1, follower.s0)
+                    max_pos = leader.position_s - follower.length - min_gap
+                    if follower.position_s > max_pos:
+                        follower.position_s = max(0.0, max_pos)
+                        follower.speed = min(follower.speed, leader.speed)
+                        follower.acceleration = min(follower.acceleration, 0.0)
 
     def _step_integrate(self) -> None:
         """Euler integrate positions, handle edge transitions and trip completion."""
@@ -541,19 +664,34 @@ class NetworkSimulation:
             if veh.position_s >= edge_len:
                 overflow = veh.position_s - edge_len
                 ev_list  = self._edge_vehicles.get(edge_id)
-                if ev_list and veh in ev_list:
-                    ev_list.remove(veh)
-
                 next_idx = veh.route_index + 1
                 if next_idx < len(veh.route):
                     next_edge_id  = veh.route[next_idx]
                     next_edge     = self.network.edges[next_edge_id]
+                    target_lane = min(veh.lane_id, max(0, next_edge.num_lanes - 1))
+
+                    # Queue spillback: do not enter a blocked next edge.
+                    if self._entry_blocked(
+                        next_edge_id,
+                        target_lane,
+                        veh,
+                        enter_position=overflow,
+                    ):
+                        veh.position_s = max(0.0, edge_len - max(0.1, veh.length + veh.s0))
+                        veh.speed = 0.0
+                        continue
+
+                    if ev_list and veh in ev_list:
+                        ev_list.remove(veh)
                     veh.route_index   = next_idx
                     veh.current_edge  = next_edge_id
+                    veh.lane_id       = target_lane
                     veh.position_s    = overflow
                     veh.v0            = next_edge.speed_limit
                     self._edge_vehicles[next_edge_id].append(veh)
                 else:
+                    if ev_list and veh in ev_list:
+                        ev_list.remove(veh)
                     # Trip complete
                     exit_time = self.time
                     if exit_time >= self.warmup:
@@ -581,6 +719,8 @@ class NetworkSimulation:
 
     def step(self) -> None:
         """Advance simulation by ``self.dt`` seconds."""
+        self._extend_spawn_horizon_if_needed()
+
         # 1. Spawn vehicles from deque (O(1) per spawn)
         while self._spawn_queue and self._spawn_queue[0][0] <= self.time:
             _, origin, dest = self._spawn_queue.popleft()
@@ -591,9 +731,11 @@ class NetworkSimulation:
 
         # 3. MOBIL lane changes — serial (shared lane state)
         self._step_lane_changes()
+        self._enforce_no_overlap()
 
         # 4. Euler integration + edge transitions + trip logging
         self._step_integrate()
+        self._enforce_no_overlap()
 
         # 5. Pedestrian SFM step
         from engine.pedestrians import step_pedestrian

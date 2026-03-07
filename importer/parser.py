@@ -1,6 +1,8 @@
 """Parse raw OSM JSON into structured node/edge dicts; split ways at junctions."""
 from __future__ import annotations
 
+import math
+
 from importer.projection import latlng_to_mercator
 
 # Highway types we want to include (excludes footways, cycleways, etc.)
@@ -17,6 +19,50 @@ _HIGHWAY_TYPES = {
     "road",
 }
 
+_POI_KEYS = {"amenity", "office", "shop", "building"}
+
+
+def _is_poi(tags: dict) -> bool:
+    """Return True if *tags* contain any POI-relevant key."""
+    return any(k in tags for k in _POI_KEYS)
+
+
+def _polygon_area_centroid(points: list[tuple[float, float]]) -> tuple[float, float, float]:
+    """Return (area_m2, cx, cy) for a polygon in projected metres.
+
+    Uses shoelace; returns (0, mean_x, mean_y) for degenerate geometry.
+    """
+    if len(points) < 3:
+        if not points:
+            return 0.0, 0.0, 0.0
+        mx = sum(p[0] for p in points) / len(points)
+        my = sum(p[1] for p in points) / len(points)
+        return 0.0, mx, my
+
+    if points[0] != points[-1]:
+        points = points + [points[0]]
+
+    area2 = 0.0
+    cx = 0.0
+    cy = 0.0
+    for i in range(len(points) - 1):
+        x0, y0 = points[i]
+        x1, y1 = points[i + 1]
+        cross = x0 * y1 - x1 * y0
+        area2 += cross
+        cx += (x0 + x1) * cross
+        cy += (y0 + y1) * cross
+
+    area = abs(area2) * 0.5
+    if math.isclose(area2, 0.0):
+        mx = sum(p[0] for p in points[:-1]) / max(1, len(points) - 1)
+        my = sum(p[1] for p in points[:-1]) / max(1, len(points) - 1)
+        return 0.0, mx, my
+
+    cx /= (3.0 * area2)
+    cy /= (3.0 * area2)
+    return area, cx, cy
+
 
 def parse_osm(data: dict) -> dict:
     """Parse raw Overpass/OSM JSON.
@@ -26,6 +72,8 @@ def parse_osm(data: dict) -> dict:
         {
           "nodes": {node_id: {"id", "lat", "lon", "x", "y"}, ...},
           "ways":  [{"id", "nodes": [node_ids], "tags": {...}}, ...],
+          "pois":  [{"id", "x", "y", "lat", "lon", "tags", "source"}, ...],
+          "buildings": [{"id", "x", "y", "lat", "lon", "tags", "footprint_area"}, ...],
         }
 
     Only ``highway`` ways matching ``_HIGHWAY_TYPES`` are included.
@@ -56,20 +104,23 @@ def parse_osm(data: dict) -> dict:
                     "tags": new_tags,
                 }
 
-    # Filter highway ways
+    # Filter ways and POI-like objects
     highway_ways: list[dict] = []
+    poi_ways: list[dict] = []
     for el in elements:
         if el.get("type") != "way":
             continue
         tags = el.get("tags", {})
         hw = tags.get("highway", "")
-        if hw not in _HIGHWAY_TYPES:
-            continue
-        highway_ways.append({
+        way_obj = {
             "id": int(el["id"]),
             "nodes": [int(n) for n in el.get("nodes", [])],
             "tags": tags,
-        })
+        }
+        if hw in _HIGHWAY_TYPES:
+            highway_ways.append(way_obj)
+        if _is_poi(tags):
+            poi_ways.append(way_obj)
 
     # ------------------------------------------------------------------ #
     # Find junction nodes: nodes that appear in > 1 way, OR appear in the
@@ -130,8 +181,55 @@ def parse_osm(data: dict) -> dict:
 
     nodes_out = {nid: raw_nodes[nid] for nid in used_nids if nid in raw_nodes}
 
+    # ------------------------------------------------------------------ #
+    # POIs: tagged nodes + tagged ways (centroid)
+    # ------------------------------------------------------------------ #
+    pois: list[dict] = []
+    buildings: list[dict] = []
+
+    for nid, nd in raw_nodes.items():
+        tags = nd.get("tags", {})
+        if not _is_poi(tags):
+            continue
+        pois.append({
+            "id": f"node_{nid}",
+            "source": "node",
+            "x": float(nd["x"]),
+            "y": float(nd["y"]),
+            "lat": float(nd["lat"]),
+            "lon": float(nd["lon"]),
+            "tags": tags,
+        })
+
+    for way in poi_ways:
+        w_nodes = [raw_nodes[nid] for nid in way["nodes"] if nid in raw_nodes]
+        if not w_nodes:
+            continue
+        xy = [(float(n["x"]), float(n["y"])) for n in w_nodes]
+        area_m2, cx, cy = _polygon_area_centroid(xy)
+        lat = sum(float(n["lat"]) for n in w_nodes) / len(w_nodes)
+        lon = sum(float(n["lon"]) for n in w_nodes) / len(w_nodes)
+        poi = {
+            "id": f"way_{way['id']}",
+            "source": "way",
+            "x": float(cx),
+            "y": float(cy),
+            "lat": float(lat),
+            "lon": float(lon),
+            "tags": way["tags"],
+        }
+        pois.append(poi)
+
+        if "building" in way["tags"]:
+            buildings.append({
+                **poi,
+                "footprint_area": float(area_m2),
+            })
+
     return {
         "nodes": nodes_out,
         "ways": highway_ways,
         "edges": edges,
+        "pois": pois,
+        "buildings": buildings,
     }

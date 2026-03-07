@@ -2,7 +2,7 @@
 
 Live-serving mode
 -----------------
-  python run.py scenarios/oakville_on.json --serve
+  python run.py --serve
 
 Starts an HTTP server (default port 8765) that exposes:
   GET  /network        — road network JSON (re-fetched after each import)
@@ -16,6 +16,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import sys
 import threading
 import time as _time_module
@@ -29,6 +30,27 @@ from engine.simulation import Simulation
 # --------------------------------------------------------------------------- #
 _IMPORT_DURATION_S = 7200.0   # 2-hour commute window
 _IMPORT_WARMUP_S   =  120.0   # 2-minute warmup
+
+
+def _blank_scenario() -> dict:
+    """Return an empty network scenario for blank-map startup."""
+    return {
+        "_comment": "Blank map",
+        "network": {
+            "nodes": [],
+            "edges": [],
+            "signal_nodes": [],
+            "signal_cycle_s": 90.0,
+        },
+        "demand": {},
+        "duration": 24 * 3600.0,
+        "warmup": 0.0,
+        "seed": 42,
+        "start_hour": 0.0,
+        "temporal_demand": True,
+        "continuous_demand": True,
+        "auto_m3_demand": False,
+    }
 
 
 def _run_scenario(scenario: dict) -> dict:
@@ -241,6 +263,9 @@ def _build_network_sim(scenario: dict):
     from engine.network import Network, Node, Edge
     from engine.network_simulation import NetworkSimulation
     from engine.signals import SignalPlan, Phase
+    from importer.projection import mercator_to_latlng
+    from engine.worldpop import slugify_city
+    import os as _os
 
     net = Network()
 
@@ -315,6 +340,105 @@ def _build_network_sim(scenario: dict):
     dur     = float(scenario.get("duration", 300.0))
     seed    = int(scenario.get("seed", 42))
     warmup  = float(scenario.get("warmup", 0.0))
+    continuous = bool(scenario.get("continuous_demand", False))
+    start_hour = float(scenario.get("start_hour", 0.0))
+    temporal_demand = bool(scenario.get("temporal_demand", False))
+    auto_m3 = bool(scenario.get("auto_m3_demand", False))
+    worldpop_city_slug = scenario.get("worldpop_city_slug")
+    if not worldpop_city_slug:
+        worldpop_city_slug = slugify_city(str(scenario.get("_comment", "unknown-city")))
+
+    if auto_m3 and "network" in scenario:
+        try:
+            # Promote sparse legacy OD configs to broad M3 spatial demand.
+            n_orig = len(demand)
+            n_pairs = sum(len(v) for v in demand.values()) if isinstance(demand, dict) else 0
+            if n_orig < 25 or n_pairs < 150:
+                from engine.poi_demand import generate_spatial_demand
+                from importer import overpass, parser, inference
+
+                net_cfg = scenario["network"]
+                bbox_cfg = net_cfg.get("bbox", {})
+                if all(k in bbox_cfg for k in ("south", "west", "north", "east")):
+                    bbox = (
+                        float(bbox_cfg["south"]),
+                        float(bbox_cfg["west"]),
+                        float(bbox_cfg["north"]),
+                        float(bbox_cfg["east"]),
+                    )
+                else:
+                    lats: list[float] = []
+                    lons: list[float] = []
+                    for n in net_cfg.get("nodes", []):
+                        if "lat" in n and "lon" in n:
+                            lats.append(float(n["lat"]))
+                            lons.append(float(n["lon"]))
+                        else:
+                            lat, lon = mercator_to_latlng(float(n["x"]), float(n["y"]))
+                            lats.append(lat)
+                            lons.append(lon)
+                    if lats and lons:
+                        pad = 0.002
+                        bbox = (
+                            min(lats) - pad,
+                            min(lons) - pad,
+                            max(lats) + pad,
+                            max(lons) + pad,
+                        )
+                    else:
+                        bbox = None
+
+                pois = net_cfg.get("pois", [])
+                buildings = net_cfg.get("buildings", [])
+                if bbox is not None and (not pois or not buildings):
+                    try:
+                        osm = overpass.fetch(bbox)
+                        parsed = parser.parse_osm(osm)
+                        enriched = inference.infer(parsed)
+                        pois = pois or enriched.get("pois", [])
+                        buildings = buildings or enriched.get("buildings", [])
+                    except Exception as exc:
+                        print(f"[m3] context fetch failed: {exc}", file=sys.stderr)
+
+                if bbox is not None:
+                    existing_total = 0.0
+                    if isinstance(demand, dict):
+                        existing_total = sum(sum(v.values()) for v in demand.values())
+                    peak_veh_hr = float(scenario.get("peak_veh_hr", max(1200.0, existing_total)))
+                    max_pairs = int(scenario.get("max_pairs", min(2500, max(400, len(net.nodes) // 4))))
+                    min_unique = int(scenario.get("min_unique_origins", max(40, max_pairs // 4)))
+                    intercity_share = scenario.get("intercity_share")
+                    worldpop_raster = net_cfg.get("worldpop_raster_path")
+
+                    m3_demand = generate_spatial_demand(
+                        network=net,
+                        bbox=bbox,
+                        pois=pois,
+                        buildings=buildings,
+                        seed=seed,
+                        peak_veh_hr=peak_veh_hr,
+                        max_pairs=max_pairs,
+                        worldpop_raster_path=worldpop_raster,
+                        worldpop_city_slug=worldpop_city_slug,
+                        min_unique_origins=min_unique,
+                        intercity_share=intercity_share,
+                        intercity_ring_km=float(scenario.get("intercity_ring_km", 80.0)),
+                        parallel_workers=(
+                            int(scenario.get("m3_parallel_workers", 0))
+                            or int(_os.getenv("M3_PARALLEL_WORKERS", "0"))
+                            or None
+                        ),
+                    )
+                    if m3_demand:
+                        m3_orig = len(m3_demand)
+                        m3_pairs = sum(len(v) for v in m3_demand.values())
+                        print(
+                            f"[m3] demand upgrade: origins {n_orig}->{m3_orig}, pairs {n_pairs}->{m3_pairs}",
+                            file=sys.stderr,
+                        )
+                        demand = m3_demand
+        except Exception as exc:
+            print(f"[m3] auto demand disabled by error: {exc}", file=sys.stderr)
 
     return NetworkSimulation(
         network=net,
@@ -323,6 +447,9 @@ def _build_network_sim(scenario: dict):
         seed=seed,
         warmup=warmup,
         signal_plans=signal_plans,
+        continuous_demand=continuous,
+        start_hour=start_hour,
+        temporal_demand=temporal_demand,
     )
 
 
@@ -346,9 +473,15 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
     POST /import         Geocode + fetch OSM + hot-swap simulation.
     """
     import os as _os
+    from engine.worldpop import slugify_city
 
     # ---- Initial simulation build ----------------------------------------
-    sim = _build_network_sim(scenario)
+    scenario_live = dict(scenario)
+    scenario_live["continuous_demand"] = True
+    scenario_live.setdefault("temporal_demand", True)
+    scenario_live.setdefault("auto_m3_demand", True)
+    scenario_live.setdefault("worldpop_city_slug", slugify_city(location))
+    sim = _build_network_sim(scenario_live)
     net = sim.network
 
     def _mk_net_payload(n):
@@ -387,9 +520,16 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
 
     # ---- Import status --------------------------------------------------
     _import_status: dict = {"stage": "idle", "progress": 0.0, "message": ""}
+    _import_job: dict = {
+        "id": 0,
+        "thread": None,
+        "started_mono": 0.0,
+    }
+    _IMPORT_STALL_S = 120.0
 
-    # Sim clock: start at 7:00 AM (25 200 s into the day)
-    _START_S = 7 * 3600
+    # Sim clock start-of-day (default 00:00 unless scenario overrides start_hour).
+    _start_hour = int(float(scenario.get("start_hour", 0.0))) % 24
+    _START_S = _start_hour * 3600
 
     # ---- WebSocket client registry --------------------------------------
     _ws_clients: set = set()
@@ -448,28 +588,44 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
     sim_thread.start()
 
     # ---- Background import function -------------------------------------
-    def _do_import(query: str) -> None:
+    def _do_import(query: str, job_id: int) -> None:
+        def _active() -> bool:
+            with _imp_lock:
+                return int(_import_job.get("id", -1)) == int(job_id)
+
         def _upd(**kw):
             with _imp_lock:
+                if int(_import_job.get("id", -1)) != int(job_id):
+                    return
                 _import_status.update(**kw)
 
         try:
+            if not _active():
+                return
             # 1. Geocode
             _upd(stage="geocoding", progress=0.05, message=f'Geocoding "{query}"…')
             from importer.geocode import geocode
             loc = geocode(query)
+            if not _active():
+                return
             short_name = loc["display_name"].split(",")[0].strip()
+            from engine.worldpop import slugify_city
+            city_slug = slugify_city(short_name)
 
             # 2. Fetch OSM
             _upd(stage="fetching_osm", progress=0.15,
                  message=f"Fetching OSM data for {short_name}…")
             from importer import import_bbox
             raw_scenario = import_bbox(*loc["bbox"])
+            if not _active():
+                return
 
             # 3. Convert importer format
             _upd(stage="building_network", progress=0.50,
                  message="Building road network…")
             converted = _scenario_from_import(raw_scenario)
+            if not _active():
+                return
             n_nodes = len(converted["network"]["nodes"])
             n_edges = len(converted["network"]["edges"])
             print(
@@ -477,11 +633,12 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                 file=sys.stderr,
             )
 
-            # 4. Quick network build for node classification
+            # 4. Build temporary network for M3 OD generation.
             _upd(stage="generating_demand", progress=0.65,
-                 message="Classifying nodes and generating commute demand…")
+                 message="Generating M3 spatial demand (WorldPop + POI + buildings)…")
             from engine.network import Network, Node, Edge
             from engine.commute import generate_commute_demand
+            from engine.poi_demand import generate_spatial_demand
             _temp_net = Network()
             for nd in converted["network"]["nodes"]:
                 _temp_net.add_node(Node(
@@ -497,18 +654,62 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                     geometry=ed.get("geometry", []),
                     road_type=str(ed.get("road_type", "primary")),
                 ))
-            # Higher flow (400 veh/hr total, 60 pairs) keeps ~20-50 cars
-            # on screen at steady state during the morning peak window.
-            demand = generate_commute_demand(
-                _temp_net,
-                seed=42,
-                peak_veh_hr=400.0,
-                max_pairs=60,
+            # Milestone 3 demand: WorldPop-weighted origins + POI/building
+            # purpose destinations.  Falls back to legacy commute demand.
+            m3_bbox = converted["network"].get("bbox", {})
+            m3_pois = converted["network"].get("pois", [])
+            m3_buildings = converted["network"].get("buildings", [])
+            m3_worldpop_raster = (
+                converted["network"].get("worldpop_raster_path")
+                or _os.getenv("WORLDPOP_RASTER_PATH")
             )
+            bbox_tuple = (
+                float(m3_bbox.get("south", loc["bbox"][0])),
+                float(m3_bbox.get("west", loc["bbox"][1])),
+                float(m3_bbox.get("north", loc["bbox"][2])),
+                float(m3_bbox.get("east", loc["bbox"][3])),
+            )
+            try:
+                demand_peak_veh_hr = min(4500.0, max(1200.0, 1200.0 * math.sqrt(max(1.0, n_edges / 120.0))))
+                demand_max_pairs = int(min(900, max(120, n_nodes // 5)))
+                demand_min_unique = int(min(300, max(30, demand_max_pairs // 4)))
+                demand = generate_spatial_demand(
+                    network=_temp_net,
+                    bbox=bbox_tuple,
+                    pois=m3_pois,
+                    buildings=m3_buildings,
+                    seed=42,
+                    peak_veh_hr=demand_peak_veh_hr,
+                    max_pairs=demand_max_pairs,
+                    worldpop_raster_path=m3_worldpop_raster,
+                    worldpop_city_slug=city_slug,
+                    min_unique_origins=demand_min_unique,
+                    intercity_share=None,
+                    intercity_max_pairs=max(80, demand_max_pairs // 4),
+                    intercity_ring_km=80.0,
+                    parallel_workers=(
+                        int(_os.getenv("M3_PARALLEL_WORKERS", "0")) or None
+                    ),
+                )
+            except Exception as exc:
+                print(f"[import] M3 demand fallback: {exc}", file=sys.stderr)
+                demand = generate_commute_demand(
+                    _temp_net,
+                    seed=42,
+                    peak_veh_hr=400.0,
+                    max_pairs=60,
+                )
             converted["demand"]   = demand
             converted["duration"] = _IMPORT_DURATION_S
             converted["warmup"]   = _IMPORT_WARMUP_S
             converted["seed"]     = 42
+            converted["continuous_demand"] = True
+            # Keep imported runs on the same midnight temporal profile as blank startup
+            # so we do not inject peak-hour flow at t=00:00.
+            converted["temporal_demand"] = True
+            converted["start_hour"] = 0.0
+            converted["auto_m3_demand"] = False
+            converted["worldpop_city_slug"] = city_slug
             print(
                 f"[import] demand: {sum(len(v) for v in demand.values())} OD pairs",
                 file=sys.stderr,
@@ -521,10 +722,14 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
             new_net = new_sim.network
             new_payload     = _mk_net_payload(new_net)
             new_signal_ids  = list(new_sim._signal_plans.keys())
+            if not _active():
+                return
 
             # 6. Atomic hot-swap
             _upd(stage="swapping", progress=0.95,
                  message="Hot-swapping simulation…")
+            if not _active():
+                return
             with _lock:
                 _world["sim"]            = new_sim
                 _world["net"]            = new_net
@@ -576,7 +781,7 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
         with _ctrl_lock:
             ctrl_snap = dict(_ctrl)
 
-        # Wall-clock: simulation starts at 07:00 AM
+        # Wall-clock from scenario start hour (default midnight).
         wall_s  = _START_S + sim_time
         wall_h  = int(wall_s // 3600) % 24
         wall_m  = int(wall_s % 3600) // 60
@@ -735,22 +940,50 @@ def _serve(scenario: dict, port: int = 8765, location: str = "Traffic Sim") -> N
                 if not query:
                     self._json(400, b'{"error":"missing query"}')
                     return
+                force = bool(body.get("force", False))
                 # Reject if another import is running
                 with _imp_lock:
                     stage = _import_status.get("stage", "idle")
-                    if stage in ("geocoding", "fetching_osm", "building_network",
-                                 "generating_demand", "spawning", "swapping"):
-                        self._json(409, b'{"error":"import already in progress"}')
+                    active_stages = {
+                        "geocoding", "fetching_osm", "building_network",
+                        "generating_demand", "spawning", "swapping",
+                    }
+                    thr = _import_job.get("thread")
+                    started = float(_import_job.get("started_mono", 0.0))
+                    age = max(0.0, _time_module.monotonic() - started) if started else 0.0
+                    running = bool(getattr(thr, "is_alive", lambda: False)())
+                    if stage in active_stages and running and age < _IMPORT_STALL_S and not force:
+                        msg = (
+                            f'import already in progress '
+                            f'({stage}, {int(age)}s)'
+                        ).encode()
+                        self._json(409, b'{"error":"' + msg + b'"}')
                         return
+                    # Stale/dead import guard: supersede previous job.
+                    if stage in active_stages and (force or not running or age >= _IMPORT_STALL_S):
+                        _import_status.clear()
+                        _import_status.update(
+                            stage="idle",
+                            progress=0.0,
+                            message=("Previous import cancelled." if force
+                                     else "Previous import cleared (stale)."),
+                        )
+                        _import_job["id"] = int(_import_job.get("id", 0)) + 1
+
+                    new_job_id = int(_import_job.get("id", 0)) + 1
+                    _import_job["id"] = new_job_id
                     _import_status.clear()
                     _import_status.update(
                         stage="geocoding", progress=0.0,
                         message=f'Starting import for "{query}"…',
                     )
                 t = threading.Thread(
-                    target=_do_import, args=(query,),
+                    target=_do_import, args=(query, new_job_id),
                     daemon=True, name=f"import-{query[:20]}",
                 )
+                with _imp_lock:
+                    _import_job["thread"] = t
+                    _import_job["started_mono"] = _time_module.monotonic()
                 t.start()
                 resp = json.dumps({"status": "importing", "query": query}).encode()
                 self._json(200, resp)
@@ -808,27 +1041,74 @@ def main(argv=None):
     parser.add_argument("--serve", action="store_true",
                         help="Start HTTP server streaming live state (default port 8765)")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--worldpop-cache-list", action="store_true",
+                        help="List city-specific WorldPop caches")
+    parser.add_argument("--worldpop-cache-delete", metavar="CITY",
+                        help="Delete city-specific WorldPop cache by city name/slug")
+    parser.add_argument("--worldpop-cache-delete-all", action="store_true",
+                        help="Delete all city-specific WorldPop caches")
+    parser.add_argument("--worldpop-cache-dir", default=".overpass_cache",
+                        help="Cache directory for WorldPop city caches")
     args = parser.parse_args(argv)
+
+    if args.worldpop_cache_list or args.worldpop_cache_delete or args.worldpop_cache_delete_all:
+        import os as _os
+        from engine.worldpop import list_worldpop_caches, delete_worldpop_city_cache
+
+        cache_dir = args.worldpop_cache_dir
+        if args.worldpop_cache_delete_all:
+            entries = list_worldpop_caches(cache_dir=cache_dir)
+            for e in entries:
+                try:
+                    _os.remove(e["path"])
+                except OSError:
+                    pass
+            print(f"Deleted {len(entries)} WorldPop city cache(s) from {cache_dir}")
+            return
+
+        if args.worldpop_cache_delete:
+            ok = delete_worldpop_city_cache(args.worldpop_cache_delete, cache_dir=cache_dir)
+            if ok:
+                print(f"Deleted WorldPop cache for '{args.worldpop_cache_delete}'")
+            else:
+                print(f"No WorldPop cache found for '{args.worldpop_cache_delete}'")
+            return
+
+        entries = list_worldpop_caches(cache_dir=cache_dir)
+        if not entries:
+            print(f"No WorldPop city caches in {cache_dir}")
+            return
+        print(f"WorldPop city caches in {cache_dir}:")
+        for e in entries:
+            print(f"  - {e['city_slug']}: {e['size_bytes']} bytes ({e['path']})")
+        return
 
     if args.import_bbox:
         _import_bbox_cmd(args.import_bbox, args.output)
         return
 
-    if args.scenario is None:
+    if args.scenario is None and not args.serve:
         parser.print_help()
         sys.exit(1)
 
     if args.compare:
+        if args.scenario is None:
+            print("Error: --compare requires a scenario file", file=sys.stderr)
+            sys.exit(1)
         _compare(args.scenario, args.runs)
         return
 
-    with open(args.scenario) as fh:
-        scenario = json.load(fh)
+    if args.scenario is None:
+        scenario = _blank_scenario()
+        location = "Blank map"
+    else:
+        with open(args.scenario) as fh:
+            scenario = json.load(fh)
 
-    # Derive a short location name from the scenario file or its _comment field
-    import os as _os
-    _raw_name = _os.path.basename(args.scenario).replace(".json", "").replace("_", " ")
-    location  = scenario.get("_comment", "").split("—")[0].strip() or _raw_name.title()
+        # Derive a short location name from the scenario file or its _comment field
+        import os as _os
+        _raw_name = _os.path.basename(args.scenario).replace(".json", "").replace("_", " ")
+        location  = scenario.get("_comment", "").split("—")[0].strip() or _raw_name.title()
 
     if args.serve:
         if args.duration is not None:

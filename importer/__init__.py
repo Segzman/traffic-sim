@@ -90,6 +90,14 @@ def import_bbox(
                 for nid, node in nodes.items()
             },
             "edges": edges,
+            "pois": enriched.get("pois", []),
+            "buildings": enriched.get("buildings", []),
+            "bbox": {
+                "south": float(south),
+                "west": float(west),
+                "north": float(north),
+                "east": float(east),
+            },
         },
     }
     return scenario

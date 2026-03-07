@@ -607,6 +607,43 @@
     let _paused = false;
     let _currentLocation = '';
     let _importPolling   = false;
+    let _storageScope = 'blank-map';
+    let _loadedScope = null;
+
+    const STORAGE_SCHEMA = 'v2';
+    function _slug(s) {
+      return String(s || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'blank-map';
+    }
+    function _storageKey(name) {
+      return `sim_${STORAGE_SCHEMA}_${_storageScope}_${name}`;
+    }
+    function _storageGet(name) {
+      try { return localStorage.getItem(_storageKey(name)); }
+      catch (_) { return null; }
+    }
+    function _storageSet(name, value) {
+      try { localStorage.setItem(_storageKey(name), String(value)); }
+      catch (_) {}
+    }
+    function _storagePurgeLegacy() {
+      // One-time cleanup of old global keys that caused stale startup states.
+      try {
+        const rm = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k) continue;
+          if (k.startsWith('sim_') && !k.startsWith(`sim_${STORAGE_SCHEMA}_`)) rm.push(k);
+        }
+        rm.forEach(k => localStorage.removeItem(k));
+      } catch (_) {}
+    }
+    _storagePurgeLegacy();
+    function _setStorageScopeFromLocation(loc) {
+      _storageScope = _slug(loc);
+    }
 
     const SPEED_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 288];
     function demandFromSlider(v) { return parseFloat((v / 10).toFixed(2)); }
@@ -653,7 +690,7 @@
       if (slDemandParam) {
         slDemandParam.value = v;
         if (lblDemandParam) lblDemandParam.textContent = label;
-        localStorage.setItem('sim_demand_scale', v);
+        _storageSet('demand_scale', v);
       }
       // Send both channels so either path in the backend picks it up
       postControl({ demand_mult: v, params: { demand_scale: v } });
@@ -726,11 +763,19 @@
       searchInput.blur();
 
       try {
-        const resp = await fetch(BASE + '/import', {
+        let resp = await fetch(BASE + '/import', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query }),
         });
+        // If an old import is stuck, supersede it with a forced restart.
+        if (resp.status === 409) {
+          resp = await fetch(BASE + '/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, force: true }),
+          });
+        }
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}));
           showImportError(err.error || `Server error ${resp.status}`);
@@ -788,15 +833,10 @@
     }
     const sendParams = debounce((p) => postControl({ params: p }), 150);
 
-    // Attach listeners + restore from localStorage
+    // Attach listeners (scoped state restored after first location snapshot)
     document.querySelectorAll('[data-param]').forEach(input => {
       const name = input.dataset.param;
       const lbl  = document.querySelector(`[data-lbl="${name}"]`);
-      const saved = localStorage.getItem('sim_' + name);
-      if (saved !== null) {
-        input.value = saved;
-        if (lbl) lbl.textContent = fmtParam(name, saved);
-      }
       // Restore auto-button state for fleet mix on page load
       if (name.startsWith('vehicle_mix_')) {
         _updateMixAutoState(name, parseFloat(input.value));
@@ -804,7 +844,7 @@
       input.addEventListener('input', () => {
         const v = parseFloat(input.value);
         if (lbl) lbl.textContent = fmtParam(name, v);
-        localStorage.setItem('sim_' + name, v);
+        _storageSet(name, v);
         sendParams({ [name]: v });
         if (name.startsWith('vehicle_mix_')) {
           _updateMixAutoState(name, v);
@@ -831,28 +871,48 @@
         const slider = document.querySelector(`[data-param="${param}"]`);
         if (!slider) return;
         slider.value = -1;
-        localStorage.setItem('sim_' + param, -1);
+        _storageSet(param, -1);
         sendParams({ [param]: -1.0 });
         _updateMixAutoState(param, -1);
       });
     });
 
-    // Push all stored params to backend once connected
-    function applyStoredParams() {
+    // Load per-location stored params; defaults stay active if no saved values exist.
+    function applyStoredParamsForScope() {
       const params = {};
-      document.querySelectorAll('[data-param]').forEach(i => {
-        params[i.dataset.param] = parseFloat(i.value);
+      document.querySelectorAll('[data-param]').forEach(input => {
+        const name = input.dataset.param;
+        const saved = _storageGet(name);
+        if (saved !== null) input.value = saved;
+        const v = parseFloat(input.value);
+        params[name] = v;
+        const lbl = document.querySelector(`[data-lbl="${name}"]`);
+        if (lbl) lbl.textContent = fmtParam(name, v);
+        if (name.startsWith('vehicle_mix_')) _updateMixAutoState(name, v);
       });
+      // Keep the controls-card demand slider in sync with restored demand_scale.
+      if (params.demand_scale !== undefined) setDemand(params.demand_scale);
       postControl({ params });
     }
-    setTimeout(applyStoredParams, 600);
+    function ensureScopeLoaded(loc) {
+      _setStorageScopeFromLocation(loc || 'blank-map');
+      if (_loadedScope === _storageScope) return;
+      _loadedScope = _storageScope;
+      applyStoredParamsForScope();
+      // Truck-lane toggle is persisted per location too.
+      const saved = _storageGet('truck_lane_discipline');
+      _truckDiscipline = (saved === null) ? true : (saved === 'true');
+      if (truckLanesBtn) {
+        truckLanesBtn.textContent = '🚛 lanes ' + (_truckDiscipline ? '✔' : '✖');
+        truckLanesBtn.style.color = _truckDiscipline ? '#8ab3d0' : '#ff5370';
+      }
+      postControl({ params: { truck_lane_discipline: _truckDiscipline } });
+    }
 
     // ── Truck lanes toggle ────────────────────────────────────────────────
     let _truckDiscipline = true;
     const truckLanesBtn = document.getElementById('truck-lanes-btn');
     if (truckLanesBtn) {
-      const saved = localStorage.getItem('sim_truck_lane_discipline');
-      if (saved !== null) _truckDiscipline = (saved === 'true');
       truckLanesBtn.textContent = '🚛 lanes ' + (_truckDiscipline ? '✔' : '✖');
       truckLanesBtn.style.color = _truckDiscipline ? '#8ab3d0' : '#ff5370';
       truckLanesBtn.addEventListener('click', (e) => {
@@ -860,7 +920,7 @@
         _truckDiscipline = !_truckDiscipline;
         truckLanesBtn.textContent = '🚛 lanes ' + (_truckDiscipline ? '✔' : '✖');
         truckLanesBtn.style.color = _truckDiscipline ? '#8ab3d0' : '#ff5370';
-        localStorage.setItem('sim_truck_lane_discipline', _truckDiscipline);
+        _storageSet('truck_lane_discipline', _truckDiscipline);
         postControl({ params: { truck_lane_discipline: _truckDiscipline } });
       });
     }
@@ -908,7 +968,7 @@
             input.value = values[p];
             const lbl = document.querySelector(`[data-lbl="${p}"]`);
             if (lbl) lbl.textContent = fmtParam(p, values[p]);
-            localStorage.setItem('sim_' + p, values[p]);
+            _storageSet(p, values[p]);
           }
         });
         postControl({ params: values });
@@ -944,6 +1004,7 @@
       if (state.location && state.location !== _currentLocation) {
         _currentLocation = state.location;
         sLocation.textContent = state.location;
+        ensureScopeLoaded(state.location);
       }
 
       const vehs = state.vehicles || [];
@@ -1005,7 +1066,7 @@
         overlay.className = 'err';
         msgEl.textContent =
           'Cannot reach server at ' + BASE +
-          '\n\nStart the server:\n  python run.py scenarios/oakville_on.json --serve';
+          '\n\nStart the server:\n  python run.py --serve';
         return;
       }
       renderer.setNetwork(await netResp.json());

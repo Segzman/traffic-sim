@@ -14,13 +14,18 @@ _RETRY_DELAY = 5       # seconds between retries
 
 
 def build_query(south: float, west: float, north: float, east: float) -> str:
-    """Build an Overpass QL query for highway ways in the given bounding box."""
+    """Build an Overpass QL query for roads + POIs/buildings in *bbox*."""
     bbox = f"{south},{west},{north},{east}"
     return (
         f'[out:json][timeout:{_TIMEOUT}];\n'
         f'(\n'
         f'  way["highway"]({bbox});\n'
         f'  node(w);\n'
+        f'  way["building"]({bbox});\n'
+        f'  node(w);\n'
+        f'  nwr["amenity"]({bbox});\n'
+        f'  nwr["office"]({bbox});\n'
+        f'  nwr["shop"]({bbox});\n'
         f');\n'
         f'out body;\n'
         f'>;\n'
