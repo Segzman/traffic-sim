@@ -372,6 +372,24 @@ class NetworkSimulation:
             if route_len > _MAX_ROUTE_WINDING * euclidean:
                 return
 
+        # Reject wrong-carriageway spawns: if the first edge moves strongly
+        # away from the destination the vehicle is on the opposing side of a
+        # divided highway.  Dijkstra's only fix is a U-turn through an
+        # interchange ramp, which creates the off-then-back-on pileup pattern.
+        # Threshold cos < -0.3  ≈  initial heading >107 ° off the O→D vector.
+        if euclidean > 200.0:
+            fe     = self.network.edges[route[0]]
+            fe_frm = self.network.nodes[fe.from_node]
+            fe_to  = self.network.nodes[fe.to_node]
+            mv_x, mv_y = fe_to.x - fe_frm.x, fe_to.y - fe_frm.y
+            od_x,  od_y = d_nd.x  - o_nd.x,  d_nd.y  - o_nd.y
+            mv_len = math.hypot(mv_x, mv_y)
+            od_len = math.hypot(od_x, od_y)
+            if mv_len > 0 and od_len > 0:
+                cos_angle = (mv_x * od_x + mv_y * od_y) / (mv_len * od_len)
+                if cos_angle < -0.3:
+                    return  # facing wrong way — would U-turn through interchange
+
         first_edge = route[0]
         edge = self.network.edges[first_edge]
 
