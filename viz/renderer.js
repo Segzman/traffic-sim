@@ -97,15 +97,16 @@ function signalColour(state) {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _TileLayer  —  slippy-map tile layer (CartoDB Dark Matter by default)
+// _TileLayer  —  slippy-map tile layer (Esri World Dark Gray Canvas by default)
 //
 // Tile URL variables:  {s} subdomain · {z} zoom · {x} col · {y} row · {r} retina
 // ─────────────────────────────────────────────────────────────────────────────
 class _TileLayer {
   constructor(url) {
-    // CartoDB Dark Matter (no labels) — free, dark, CORS-enabled, no API key
+    // Esri World Dark Gray Canvas — dark, CORS-enabled, no API key (attribution required).
+    // CARTO's basemaps now watermark keyless requests ("API key required").
     this._url  = url ||
-      'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png';
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
     this._subs = ['a', 'b', 'c', 'd'];
     this._cache = new Map();   // `z/x/y` → HTMLImageElement
   }
