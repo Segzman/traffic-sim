@@ -19,7 +19,7 @@ An OpenStreetMap-based traffic simulation with IDM car following, MOBIL lane cha
 - Temporal demand: 24-hour weekday and weekend profiles, continuous demand for long-running live sessions, and a distance-based walk/bike/car mode split that filters car trips
 - Fleet mix: car, van, truck, and bus classes with dimensions, HCM road-type proportions, log-normal driver variation, and class-capped disobedience
 - Weather multipliers for clear, rain, heavy rain, and snow, available through scenario data and live parameter controls
-- Browser visualisation: Canvas 2D, CartoDB Dark Matter tiles, retina tiles, smooth quadratic-curve roads, vehicle colouring by speed, signal markers, map pan and zoom, and a live stats card
+- Browser visualisation: Canvas 2D, Esri World Dark Gray Canvas tiles, smooth quadratic-curve roads, vehicle colouring by speed, signal markers, map pan and zoom, and a live stats card
 - Live parameter dashboard: IDM, MOBIL, signal, demand, fleet mix, behaviour, and weather sliders, plus Rush Hour, Aggressive, Rainy Day, and Night presets
 - Real-time state delivery over WebSocket, with HTTP polling as a fallback
 - CLI tools: headless road simulation, roundabout versus signal comparison, OSM bounding-box import, and WorldPop cache listing and deletion
@@ -32,7 +32,7 @@ An OpenStreetMap-based traffic simulation with IDM car following, MOBIL lane cha
 - SciPy for optional KD-tree nearest-neighbour lookup
 - Python standard library for the HTTP server, WebSocket framing, geocoding, and OSM fetch
 - Plain HTML, CSS, and JavaScript with Canvas 2D for the simulation view, with no npm or build step
-- CartoDB Dark Matter map tiles and OpenStreetMap data
+- Esri World Dark Gray Canvas map tiles (no API key) and OpenStreetMap data
 - Leaflet and proj4js from CDNs for the standalone editor
 - pytest and pytest-cov for tests and coverage
 - Optional: rasterio for WorldPop raster loading, CuPy for CUDA, and JAX for Apple Metal
@@ -192,7 +192,7 @@ Some tests depend on the machine or environment: the GPU backend tests require a
 ## Data and attribution
 
 - Road data: OpenStreetMap contributors, ODbL licence, https://www.openstreetmap.org/copyright
-- Map tiles: CARTO, https://carto.com/attributions
+- Map tiles: Esri World Dark Gray Canvas, https://www.esri.com/
 - Geocoding: Nominatim and OpenStreetMap
 
 ## References
